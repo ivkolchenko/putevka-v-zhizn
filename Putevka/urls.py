@@ -39,6 +39,8 @@ urlpatterns = [
                   path("before/", include('subscriber.urls')),
                   path("internal/ai/", include("core.ai_urls")),
                   path("internal/telegram/", include("core.telegram_urls")),
+                  path('staff/surveys_builder/', include('surveys_builder.urls')),
+
 
               ] + static(settings.STATIC_URL, document_root=settings.STATIC_ROOT) \
               + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

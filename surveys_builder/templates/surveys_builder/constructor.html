@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Создание опросника</title>
+</head>
+<body>
+    <h1>Создать опросник</h1>
+
+    {% for message in messages %}
+        <p role="status">{{ message }}</p>
+    {% endfor %}
+
+    <form method="post">
+        {% csrf_token %}
+
+        {{ form.as_p }}
+
+        <button type="submit">Создать опросник</button>
+    </form>
+
+<hr>
+
+<h2>Созданные опросники</h2>
+
+{% for survey in surveys %}
+    <article>
+        <h3>
+            <a href="{% url 'surveys_builder:survey_detail' pk=survey.pk %}">
+                {{ survey.title }}
+            </a>
+        </h3>
+
+        <p>
+            {{ survey.description|default:"Описание не добавлено" }}
+        </p>
+
+        <small>Номер опросника: {{ survey.id }}</small>
+    </article>
+
+    <hr>
+{% empty %}
+    <p>Опросников пока нет. Создай первый через форму выше.</p>
+{% endfor %}
+
+</body>
+</html>

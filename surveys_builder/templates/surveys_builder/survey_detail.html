@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ survey.title }}</title>
+</head>
+<body>
+    <a href="{% url 'surveys_builder:constructor' %}">
+        ← К списку опросников
+    </a>
+    {% for message in messages %}
+    <p role="status">{{ message }}</p>
+{% endfor %}
+
+    <h1>{{ survey.title }}</h1>
+
+    <p>{{ survey.description|default:"Описание не добавлено" }}</p>
+
+    <hr>
+
+    <h2>Вопросы</h2>
+
+{% for question in survey.questions.all %}
+    <article>
+        <h3>
+            {{ forloop.counter }}. {{ question.title }}
+
+            {% if question.required %}
+                <span>*</span>
+            {% endif %}
+        </h3>
+
+        <p>Тип ответа: {{ question.get_answer_type_display }}</p>
+        <a href="{% url 'surveys_builder:question_delete' pk=survey.pk question_pk=question.pk %}">
+    Удалить
+</a>
+        <a href="{% url 'surveys_builder:question_edit' pk=survey.pk question_pk=question.pk %}">
+    Редактировать
+</a>
+    </article>
+{% empty %}
+    <p>В этом опроснике пока нет вопросов.</p>
+{% endfor %}
+
+<hr>
+
+<h2>Добавить вопрос</h2>
+
+<form method="post">
+    {% csrf_token %}
+
+    {{ form.as_p }}
+
+    <button type="submit">Добавить вопрос</button>
+</form>
+
+</body>
+</html>

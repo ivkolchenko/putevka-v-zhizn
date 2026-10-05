@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Удаление вопроса</title>
+</head>
+<body>
+    <h1>Удалить вопрос?</h1>
+
+    <p>Опросник: {{ survey.title }}</p>
+
+    <blockquote>{{ question.title }}</blockquote>
+
+    <p>Восстановить вопрос через интерфейс будет нельзя.</p>
+
+    <form method="post">
+        {% csrf_token %}
+
+        <button type="submit">Да, удалить</button>
+
+        <a href="{% url 'surveys_builder:survey_detail' pk=survey.pk %}">
+            Отмена
+        </a>
+    </form>
+</body>
+</html>
