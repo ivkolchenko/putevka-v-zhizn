@@ -22,6 +22,7 @@ class QuestionsBuilder(models.Model):
     class AnswerType(models.TextChoices):
         SHORT_TEXT = "short_text", "Короткий текст"
         LONG_TEXT = "long_text", "Развернутый текст"
+        SINGLE_CHOICE = "single_choice", "Один вариант ответа"
 
     survey = models.ForeignKey(
         SurveysBuilder,
@@ -54,3 +55,26 @@ class QuestionsBuilder(models.Model):
     def __str__(self):
         return self.title
 
+
+class QuestionOptions(models.Model):
+    question = models.ForeignKey(
+        QuestionsBuilder,
+        on_delete=models.CASCADE,
+        related_name='options',
+        verbose_name='Вопрос',
+    )
+    text = models.CharField(
+        "Вариант ответа",
+        max_length=200,
+    )
+    position = models.PositiveIntegerField(
+        "Порядок",
+        default=0,
+    )
+
+    class Meta:
+        ordering = ['position', 'id']
+
+    def __str__(self):
+        return self.text
+    

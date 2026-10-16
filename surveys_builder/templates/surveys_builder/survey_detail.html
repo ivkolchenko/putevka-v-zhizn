@@ -163,6 +163,14 @@
 
         <p>Тип ответа: {{ question.get_answer_type_display }}</p>
 
+        {% if question.answer_type == "single_choice" %}
+    <ul>
+        {% for option in question.options.all %}
+            <li>{{ option.text }}</li>
+        {% endfor %}
+    </ul>
+{% endif %}
+
         <div class="question-actions">
             <a href="{% url 'surveys_builder:question_edit' pk=survey.pk question_pk=question.pk %}">
                 Редактировать
