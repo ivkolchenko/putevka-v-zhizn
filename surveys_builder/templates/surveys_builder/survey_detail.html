@@ -4,18 +4,148 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ survey.title }}</title>
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f7f9fc;
+            color: #212529;
+            max-width: 1000px;
+            margin: 30px auto;
+            padding: 0 20px;
+        }
+
+        h1 {
+            font-size: 32px;
+            margin: 0 0 10px;
+        }
+
+        h2 {
+            margin-top: 30px;
+        }
+
+        a {
+            color: #0d6efd;
+            text-decoration: none;
+        }
+
+        a:hover {
+            text-decoration: underline;
+        }
+
+        article {
+            background-color: white;
+            border: 1px solid #ddd;
+            padding: 18px;
+            margin-bottom: 15px;
+        }
+
+        form {
+            background-color: white;
+            border: 1px solid #ddd;
+            padding: 20px;
+            margin-top: 20px;
+        }
+
+        input,
+        textarea,
+        select {
+            width: 100%;
+            padding: 8px;
+            margin: 5px 0 15px;
+            border: 1px solid #ccc;
+            box-sizing: border-box;
+        }
+
+        input[type="checkbox"] {
+            width: auto;
+            padding: 0;
+            margin: 0 0 0 5px;
+            border: none;
+            vertical-align: middle;
+        }
+
+        textarea {
+            min-height: 100px;
+        }
+
+        button {
+            background-color: #0d6efd;
+            color: white;
+            border: none;
+            padding: 8px 15px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background-color: #0b5ed7;
+        }
+
+        .page-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 20px;
+            margin-top: 20px;
+        }
+
+        .btn-delete {
+            display: inline-block;
+            background-color: #dc3545;
+            color: white;
+            border: none;
+            padding: 12px 25px;
+            font-size: 16px;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        .btn-delete:hover {
+            background-color: #bb2d3b;
+            color: white;
+            text-decoration: none;
+        }
+
+        [role="status"] {
+            background-color: #cff4fc;
+            border: 1px solid #b6effb;
+            padding: 10px;
+            color: #055160;
+        }
+
+        hr {
+            border: none;
+            border-top: 1px solid #ddd;
+            margin: 25px 0;
+        }
+
+        .question-actions {
+            margin-top: 10px;
+        }
+
+        .question-actions a {
+            margin-right: 15px;
+        }
+    </style>
 </head>
 <body>
     <a href="{% url 'surveys_builder:constructor' %}">
         ← К списку опросников
     </a>
+
     {% for message in messages %}
-    <p role="status">{{ message }}</p>
-{% endfor %}
+        <p role="status">{{ message }}</p>
+    {% endfor %}
 
-    <h1>{{ survey.title }}</h1>
-
-    <p>{{ survey.description|default:"Описание не добавлено" }}</p>
+    <div class="page-header">
+        <div>
+            <h1>{{ survey.title }}</h1>
+            <p>{{ survey.description|default:"Описание не добавлено" }}</p>
+        </div>
+        <a class="btn-delete" href="{% url 'surveys_builder:survey_delete' pk=survey.pk %}">
+            Удалить опросник
+        </a>
+    </div>
 
     <hr>
 
@@ -27,17 +157,21 @@
             {{ forloop.counter }}. {{ question.title }}
 
             {% if question.required %}
-                <span>*</span>
+                <span style="color: #dc3545;">*</span>
             {% endif %}
         </h3>
 
         <p>Тип ответа: {{ question.get_answer_type_display }}</p>
-        <a href="{% url 'surveys_builder:question_delete' pk=survey.pk question_pk=question.pk %}">
-    Удалить
-</a>
-        <a href="{% url 'surveys_builder:question_edit' pk=survey.pk question_pk=question.pk %}">
-    Редактировать
-</a>
+
+        <div class="question-actions">
+            <a href="{% url 'surveys_builder:question_edit' pk=survey.pk question_pk=question.pk %}">
+                Редактировать
+            </a>
+            <a href="{% url 'surveys_builder:question_delete' pk=survey.pk question_pk=question.pk %}"
+               style="color: #dc3545;">
+                Удалить
+            </a>
+        </div>
     </article>
 {% empty %}
     <p>В этом опроснике пока нет вопросов.</p>

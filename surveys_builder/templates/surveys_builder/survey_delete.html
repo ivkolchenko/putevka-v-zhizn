@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Удаление опросника</title>
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f7f9fc;
+            color: #212529;
+            max-width: 1000px;
+            margin: 30px auto;
+            padding: 0 20px;
+        }
+
+        h1 {
+            font-size: 32px;
+        }
+
+        form {
+            background-color: white;
+            border: 1px solid #ddd;
+            padding: 20px;
+            margin: 20px 0;
+        }
+
+        button {
+            background-color: #dc3545;
+            color: white;
+            border: none;
+            padding: 8px 15px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background-color: #bb2d3b;
+        }
+
+        a {
+            color: #0d6efd;
+            text-decoration: none;
+            margin-left: 10px;
+        }
+
+        a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <h1>Удалить опросник?</h1>
+
+    <p><strong>{{ survey.title }}</strong></p>
+
+    <p>Все вопросы опросника будут удалены без возможности восстановления.</p>
+
+    <form method="post">
+        {% csrf_token %}
+
+        <button type="submit">Да, удалить</button>
+
+        <a href="{% url 'surveys_builder:constructor' %}">
+            Отмена
+        </a>
+    </form>
+</body>
+</html>

@@ -11,4 +11,6 @@ urlpatterns = [
          name='question_edit'),
     path('<int:pk>/questions/<int:question_pk>/delete/',
          views.question_delete, name='question_delete'),
+    path('<int:pk>/delete/',
+         views.survey_delete, name='survey_delete'),
 ]

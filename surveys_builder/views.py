@@ -1,13 +1,11 @@
-from django.shortcuts import render
-from django.contrib.admin.views.decorators import staff_member_required
-
-from surveys_builder.forms import SurveysBuilderForm
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib import messages
+from django.contrib.admin.views.decorators import staff_member_required
 from django.db.models import Max
-from surveys_builder.models import SurveysBuilder
+
+from surveys_builder.models import SurveysBuilder, QuestionsBuilder
 from .forms import SurveysBuilderForm, QuestionsBuilderForm
-from .models import SurveysBuilder, QuestionsBuilder
+
 
 @staff_member_required
 def constructor(request):
@@ -25,10 +23,8 @@ def constructor(request):
     return render(
         request,
         'surveys_builder/constructor.html',
-        {'form': form,
-         'surveys': surveys,
-         }
-        )
+        {'form': form, 'surveys': surveys}
+    )
 
 
 @staff_member_required
@@ -61,14 +57,15 @@ def survey_detail(request, pk):
     else:
         form = QuestionsBuilderForm()
 
-        return render(
-            request,
-            'surveys_builder/survey_detail.html',
-            {
-                'survey': survey,
-                'form': form,
-            }
-        )
+    
+    return render(
+        request,
+        'surveys_builder/survey_detail.html',
+        {
+            'survey': survey,
+            'form': form,
+        }
+    )
 
 
 @staff_member_required
@@ -82,7 +79,8 @@ def question_edit(request, pk, question_pk):
     )
 
     if request.method == 'POST':
-        form = SurveysBuilderForm(
+        
+        form = QuestionsBuilderForm(
             request.POST,
             instance=question,
         )
@@ -90,12 +88,14 @@ def question_edit(request, pk, question_pk):
             form.save()
             messages.success(request, "Вопрос обновлён!")
 
+            
             return redirect(
                 'surveys_builder:survey_detail',
-                pk=question.pk,
+                pk=survey.pk,
             )
     else:
-        form = SurveysBuilderForm(instance=question)
+        
+        form = QuestionsBuilderForm(instance=question)
 
     return render(
         request,
@@ -120,9 +120,7 @@ def question_delete(request, pk, question_pk):
 
     if request.method == 'POST':
         question.delete()
-
         messages.success(request, "Вопрос удалён!")
-
         return redirect(
             'surveys_builder:survey_detail',
             pk=survey.pk,
@@ -135,4 +133,18 @@ def question_delete(request, pk, question_pk):
             'survey': survey,
             'question': question,
         }
+    )
+
+
+@staff_member_required
+def survey_delete(request, pk):
+    survey = get_object_or_404(SurveysBuilder, pk=pk)
+    if request.method == 'POST':
+        survey.delete()
+        messages.success(request, 'Опросник удалён!')
+        return redirect('surveys_builder:constructor')
+    return render(
+        request,
+        'surveys_builder/survey_delete.html',
+        {'survey': survey},
     )

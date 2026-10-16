@@ -4,6 +4,101 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Создание опросника</title>
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f7f9fc;
+            color: #212529;
+            max-width: 1000px;
+            margin: 30px auto;
+            padding: 0 20px;
+        }
+
+        h1 {
+            font-size: 32px;
+        }
+
+        h2 {
+            margin-top: 30px;
+        }
+
+        form,
+        article {
+            background-color: white;
+            border: 1px solid #ddd;
+            padding: 20px;
+            margin: 20px 0;
+        }
+
+        input,
+        textarea,
+        select {
+            width: 100%;
+            padding: 8px;
+            margin: 5px 0 15px;
+            box-sizing: border-box;
+        }
+
+        input[type="checkbox"] {
+            width: auto;
+            padding: 0;
+            margin: 0 0 0 5px;
+            vertical-align: middle;
+        }
+
+        textarea {
+            min-height: 100px;
+        }
+
+        button {
+            background-color: #0d6efd;
+            color: white;
+            border: none;
+            padding: 8px 15px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background-color: #0b5ed7;
+        }
+
+        a {
+            color: #0d6efd;
+            text-decoration: none;
+        }
+
+        a:hover {
+            text-decoration: underline;
+        }
+
+        [role="status"] {
+            background-color: #cff4fc;
+            border: 1px solid #b6effb;
+            padding: 10px;
+            color: #055160;
+        }
+
+        blockquote {
+            background-color: white;
+            border-left: 4px solid #ccc;
+            padding: 12px;
+        }
+
+        small {
+            color: #6c757d;
+        }
+
+        hr {
+            border: none;
+            border-top: 1px solid #ddd;
+            margin: 25px 0;
+        }
+
+        .survey-actions {
+            margin-top: 10px;
+        }
+    </style>
 </head>
 <body>
     <h1>Создать опросник</h1>
@@ -37,6 +132,13 @@
         </p>
 
         <small>Номер опросника: {{ survey.id }}</small>
+
+        <div class="survey-actions">
+            <a href="{% url 'surveys_builder:survey_delete' pk=survey.pk %}"
+               style="color: #dc3545;">
+                Удалить опросник
+            </a>
+        </div>
     </article>
 
     <hr>
