@@ -34,6 +34,7 @@ urlpatterns = [
                   path('form/', include('scholar_form.urls')),
                   path('documents/', include('documents.urls')),
                   path('family-income/', include('family_income.urls')),
+                  path('study/surveys/', include('surveys.urls')),
                   path("study/", include("my_study.urls")),
                   path('staff/', include('review_by_tutor.urls')),
                   path("before/", include('subscriber.urls')),

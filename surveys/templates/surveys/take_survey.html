@@ -1,0 +1,58 @@
+{% extends "study/base_study.html" %}
+
+{% block title %}{{ survey.title }} · Путёвка в жизнь{% endblock %}
+
+{% block study_content %}
+<div class="mx-auto" style="max-width: 800px;">
+  <h1 class="h3 mb-3">{{ survey.title }}</h1>
+  {% if survey.description %}
+    <p class="text-muted mb-4">{{ survey.description|linebreaksbr }}</p>
+  {% endif %}
+
+  {% if form.questions %}
+    <form method="post" novalidate>
+      {% csrf_token %}
+
+      {% for field in form.hidden_fields %}
+        {{ field }}
+        {% for error in field.errors %}
+          <div class="alert alert-danger" role="alert">{{ error }}</div>
+        {% endfor %}
+      {% endfor %}
+
+      {% if form.non_field_errors %}
+        <div class="alert alert-danger" role="alert">
+          {{ form.non_field_errors }}
+        </div>
+      {% endif %}
+
+      {% for field in form.visible_fields %}
+        <div class="card shadow-sm mb-3">
+          <div class="card-body">
+            {% if field.widget_type == "radioselect" %}
+              <fieldset>
+                <legend class="fs-6 fw-semibold mb-2">
+                  {{ field.label }}{% if field.field.required %} <span class="text-danger" aria-label="обязательный вопрос">*</span>{% endif %}
+                </legend>
+                {{ field }}
+              </fieldset>
+            {% else %}
+              <label class="form-label fw-semibold" for="{{ field.id_for_label }}">
+                {{ field.label }}{% if field.field.required %} <span class="text-danger" aria-label="обязательный вопрос">*</span>{% endif %}
+              </label>
+              {{ field }}
+            {% endif %}
+            {% for error in field.errors %}
+              <div class="text-danger small mt-2" role="alert">{{ error }}</div>
+            {% endfor %}
+          </div>
+        </div>
+      {% endfor %}
+
+      <button class="btn btn-primary" type="submit">Отправить ответы</button>
+    </form>
+  {% else %}
+    <div class="alert alert-info" role="status">В этом опросе пока нет вопросов.</div>
+  {% endif %}
+</div>
+{% endblock %}
