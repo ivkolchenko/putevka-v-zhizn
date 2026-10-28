@@ -1,0 +1,15 @@
+{% for section in sections %}
+    <section class="card shadow-sm mb-3">
+        <div class="card-body">
+            {% if section.block %}<h2 class="h5">{{ section.block.title }}</h2>{% endif %}
+            <dl class="mb-0">
+                {% for question, value in section.rows %}
+                    <div class="border-bottom py-2">
+                        <dt>{{ question }}</dt>
+                        <dd class="mb-0">{{ value|linebreaksbr }}</dd>
+                    </div>
+                {% endfor %}
+            </dl>
+        </div>
+    </section>
+{% endfor %}

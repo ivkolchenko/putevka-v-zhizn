@@ -361,7 +361,8 @@ def delete_survey(pk, actor, revision, *, allow_published=False):
     survey = locked_survey(pk, actor)
     if allow_published:
         check_revision(survey, revision)
-        # Ответы удаляются через назначения перед защищёнными вопросами опроса.
+        if survey.assignments.filter(response__isnull=False).exists():
+            raise ValidationError('Нельзя удалить опрос с ответами или черновиками. Завершите приём или переместите его в архив.')
         survey.assignments.all().delete()
     else:
         require_draft(survey, revision)

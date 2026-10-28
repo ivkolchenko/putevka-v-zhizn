@@ -1,0 +1,12 @@
+{% extends 'core/base.html' %}
+{% block title %}Опросы · Путёвка в жизнь{% endblock %}
+{% block content %}
+<div class="mx-auto" style="max-width: 960px;">
+    {% if messages %}
+        {% for message in messages %}
+            <div class="alert alert-{{ message.tags|default:'info' }}" role="status">{{ message }}</div>
+        {% endfor %}
+    {% endif %}
+    {% block student_content %}{% endblock %}
+</div>
+{% endblock %}

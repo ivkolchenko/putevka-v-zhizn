@@ -109,6 +109,8 @@ class AllSurveysTests(TestCase):
         self.assertRedirects(response, self.url)
 
     def test_empty_state_has_create_action(self):
+        SurveyAnswer.objects.all().delete()
+        SurveyResponse.objects.all().delete()
         SurveyAssignment.objects.all().delete()
         SurveysBuilder.objects.all().delete()
         response = self.client.get(self.url)

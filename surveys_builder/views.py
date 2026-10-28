@@ -240,7 +240,7 @@ def survey_delete(request, pk):
     if request.method == 'POST':
         try:
             services.delete_survey(pk, request.user, request.POST.get('revision'), allow_published=True)
-            messages.success(request, 'Опрос и связанные с ним назначения и ответы удалены.')
+            messages.success(request, 'Опрос и назначения удалены.')
             return redirect('staff_surveys_list')
         except ValidationError as error:
             return failure(request, error, survey)

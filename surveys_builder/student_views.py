@@ -7,7 +7,7 @@ from django.views.decorators.http import require_http_methods
 
 from . import services
 from .forms import ResponseForm
-from .models import SurveyAssignment, SurveyResponse
+from .models import SurveyAssignment, SurveyResponse, SurveysBuilder
 from .views import response_sections
 
 
@@ -19,6 +19,7 @@ def survey_list(request):
     assignments = SurveyAssignment.objects.filter(user=request.user).exclude(survey__status='draft').select_related('survey', 'response').order_by('-assigned_at', '-pk')
     return render(request, 'surveys_builder/student_list.html', {
         'page_obj': Paginator(assignments, 25).get_page(request.GET.get('page')),
+        'active': 'surveys',
     })
 
 
@@ -27,7 +28,16 @@ def survey_list(request):
 def answer(request, pk):
     if not request.user.is_active:
         raise PermissionDenied
-    assignment = get_object_or_404(SurveyAssignment.objects.select_related('survey'), pk=pk, user=request.user)
+    assignment = get_object_or_404(
+        SurveyAssignment.objects.select_related('survey'),
+        pk=pk,
+        user=request.user,
+        survey__status__in=[
+            SurveysBuilder.Status.PUBLISHED,
+            SurveysBuilder.Status.CLOSED,
+            SurveysBuilder.Status.ARCHIVED,
+        ],
+    )
     survey = assignment.survey
     response = SurveyResponse.objects.filter(assignment=assignment).first()
     submitted = response is not None and response.status == 'submitted'
@@ -54,4 +64,5 @@ def answer(request, pk):
         'response_revision': response.revision if response else 0,
         'submitted': submitted, 'read_only': submitted or not survey.accepts_answers,
         'sections': response_sections(response) if response and (submitted or not survey.accepts_answers) else [],
+        'active': 'surveys',
     }, status=400 if errors else 200)

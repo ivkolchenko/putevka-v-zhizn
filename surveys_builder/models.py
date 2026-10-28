@@ -124,7 +124,7 @@ class SurveyResponse(models.Model):
         DRAFT = 'draft', 'Черновик'
         SUBMITTED = 'submitted', 'Отправлен'
 
-    assignment = models.OneToOneField(SurveyAssignment, on_delete=models.CASCADE, related_name='response')
+    assignment = models.OneToOneField(SurveyAssignment, on_delete=models.PROTECT, related_name='response')
     status = models.CharField(max_length=12, choices=Status.choices, default=Status.DRAFT)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
