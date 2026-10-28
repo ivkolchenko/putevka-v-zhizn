@@ -8,7 +8,7 @@ from django.views.decorators.http import require_http_methods
 from . import services
 from .forms import ResponseForm
 from .models import SurveyAssignment, SurveyResponse
-from .views import response_rows
+from .views import response_sections
 
 
 @login_required
@@ -32,8 +32,8 @@ def answer(request, pk):
     response = SurveyResponse.objects.filter(assignment=assignment).first()
     submitted = response is not None and response.status == 'submitted'
     initial = {f'q_{a.question_id}': a.value for a in response.answers.all()} if response else {}
-    questions = list(survey.questions.prefetch_related('options'))
-    form = ResponseForm(questions=questions, initial=initial)
+    questions = list(survey.questions.select_related('block').prefetch_related('options'))
+    form = ResponseForm(questions=questions, initial=initial, blocks=survey.blocks.all())
     errors = []
     if request.method == 'POST':
         action = request.POST.get('action')
@@ -53,5 +53,5 @@ def answer(request, pk):
         'survey': survey, 'assignment': assignment, 'form': form, 'errors': errors,
         'response_revision': response.revision if response else 0,
         'submitted': submitted, 'read_only': submitted or not survey.accepts_answers,
-        'rows': response_rows(response) if response and (submitted or not survey.accepts_answers) else [],
+        'sections': response_sections(response) if response and (submitted or not survey.accepts_answers) else [],
     }, status=400 if errors else 200)

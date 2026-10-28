@@ -489,7 +489,7 @@ class SurveyTests(TestCase):
 class LegacySurveyMigrationTests(TransactionTestCase):
     """Существующие опросы, вопросы и варианты должны пережить обновление."""
     old = ('surveys_builder', '0003_alter_questionsbuilder_answer_type_questionoptions')
-    new = ('surveys_builder', '0004_alter_surveysbuilder_options_and_more')
+    new = ('surveys_builder', '0005_question_blocks')
 
     def test_legacy_survey_becomes_draft_without_data_loss(self):
         executor = MigrationExecutor(connection)

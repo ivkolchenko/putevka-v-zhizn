@@ -12,9 +12,9 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_http_methods, require_POST
 
 from . import services
-from .forms import AudienceForm, QuestionsBuilderForm, ResponseForm, SurveyListFilterForm, SurveysBuilderForm
+from .forms import AudienceForm, QuestionBlockForm, QuestionsBuilderForm, ResponseForm, SurveyListFilterForm, SurveysBuilderForm
 from .models import SurveyResponse, SurveysBuilder
-from .selectors import resolve_audience, student_name
+from .selectors import group_questions, resolve_audience, student_name
 
 
 def page(request, template, survey=None, **context):
@@ -135,7 +135,7 @@ def survey_detail(request, pk):
     survey = get_survey(pk)
     if request.method == 'GET' and survey.is_draft and not survey.audience_configured:
         return redirect('surveys_builder:audience', pk=pk)
-    form = QuestionsBuilderForm()
+    form = QuestionsBuilderForm(survey=survey, initial={'block': request.GET.get('block')})
     if request.method == 'POST':
         try:
             services.save_question(pk, request.user, request.POST, request.POST.get('revision'))
@@ -144,8 +144,52 @@ def survey_detail(request, pk):
             form = error.form
         except ValidationError as error:
             return failure(request, error, survey)
-    return page(request, 'survey_detail.html', survey, form=form,
-                questions=survey.questions.prefetch_related('options'))
+    questions = list(survey.questions.prefetch_related('options'))
+    return page(request, 'survey_detail.html', survey, form=form, questions=questions,
+                sections=group_questions(questions, survey.blocks.all()))
+
+
+@staff_member_required
+@require_http_methods(['GET', 'POST'])
+def block_edit(request, pk, block_pk=None):
+    survey = get_survey(pk)
+    block = get_object_or_404(survey.blocks, pk=block_pk) if block_pk else None
+    form = QuestionBlockForm(instance=block)
+    if request.method == 'POST':
+        try:
+            services.save_block(pk, request.user, request.POST, request.POST.get('revision'), block_pk)
+            return redirect('surveys_builder:survey_detail', pk=pk)
+        except services.InvalidForm as error:
+            form = error.form
+        except ValidationError as error:
+            return failure(request, error, survey)
+    return page(request, 'edit.html', survey, form=form,
+                heading='Редактировать блок' if block else 'Добавить блок вопросов')
+
+
+@staff_member_required
+@require_http_methods(['GET', 'POST'])
+def block_delete(request, pk, block_pk):
+    survey = get_survey(pk)
+    block = get_object_or_404(survey.blocks, pk=block_pk)
+    if request.method == 'POST':
+        try:
+            services.block_action(pk, block_pk, request.user, 'delete', request.POST.get('revision'))
+            return redirect('surveys_builder:survey_detail', pk=pk)
+        except ValidationError as error:
+            return failure(request, error, survey)
+    return page(request, 'confirm.html', survey, heading=f'Удалить блок «{block.title}»?',
+                detail='Вопросы сохранятся и будут перенесены в раздел «Без блока».')
+
+
+@staff_member_required
+@require_POST
+def block_action(request, pk, block_pk, action):
+    try:
+        services.block_action(pk, block_pk, request.user, action, request.POST.get('revision'))
+    except ValidationError as error:
+        return failure(request, error, get_survey(pk))
+    return redirect('surveys_builder:survey_detail', pk=pk)
 
 
 @staff_member_required
@@ -211,8 +255,8 @@ def survey_delete(request, pk):
 @require_http_methods(['GET', 'POST'])
 def preview(request, pk):
     survey = get_survey(pk)
-    questions = list(survey.questions.prefetch_related('options'))
-    form = ResponseForm(request.POST if request.method == 'POST' else None, questions=questions)
+    questions = list(survey.questions.select_related('block').prefetch_related('options'))
+    form = ResponseForm(request.POST if request.method == 'POST' else None, questions=questions, blocks=survey.blocks.all())
     if request.method == 'POST' and form.is_valid():
         messages.success(request, 'Проверка пройдена. Это предпросмотр: ответы не сохранялись.')
     errors = services.publication_errors(survey) if survey.is_draft else []
@@ -277,12 +321,20 @@ def response_rows(response):
             for answer in response.answers.select_related('question').prefetch_related('question__options')]
 
 
+def response_sections(response):
+    survey = response.assignment.survey
+    values = {a.question_id: a.value for a in response.answers.all()}
+    return [{'block': section['block'],
+             'rows': [(q.title, services.answer_display(q, values.get(q.pk))) for q in section['questions']]}
+            for section in group_questions(survey.questions.prefetch_related('options'), survey.blocks.all())]
+
+
 @staff_member_required
 def response_detail(request, pk, response_pk):
     survey = get_survey(pk)
     response = get_object_or_404(SurveyResponse.objects.select_related('assignment'),
                                  pk=response_pk, assignment__survey=survey, status='submitted')
-    return page(request, 'response_detail.html', survey, response=response, rows=response_rows(response))
+    return page(request, 'response_detail.html', survey, response=response, sections=response_sections(response))
 
 
 class CsvBuffer:
@@ -300,14 +352,15 @@ def csv_cell(value):
 @staff_member_required
 def results_csv(request, pk):
     survey = get_survey(pk)
-    questions = list(survey.questions.prefetch_related('options'))
+    questions = list(survey.questions.select_related('block').prefetch_related('options'))
     responses = SurveyResponse.objects.filter(assignment__survey=survey, status='submitted').select_related(
         'assignment').prefetch_related('answers').order_by('pk')
 
     def rows():
         writer = csv.writer(CsvBuffer(), delimiter=';')
         yield '\ufeff'
-        yield writer.writerow([csv_cell(v) for v in ['ID ответа', 'Ученик', 'Логин', 'Отправлен'] + [q.title for q in questions]])
+        headers = [f'[{q.block.title}] {q.title}' if q.block_id else q.title for q in questions]
+        yield writer.writerow([csv_cell(v) for v in ['ID ответа', 'Ученик', 'Логин', 'Отправлен'] + headers])
         for response in responses.iterator(chunk_size=100):
             values = {answer.question_id: answer.value for answer in response.answers.all()}
             snapshot = response.assignment.recipient_snapshot

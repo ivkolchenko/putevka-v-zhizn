@@ -3,6 +3,6 @@
 <h1>{{ heading }}</h1><p>{{ detail }}</p>
 {% if survey.is_draft or lifecycle %}
 <form method="post">{% csrf_token %}{% include 'surveys_builder/_revision.html' %}<button type="submit">Подтвердить</button></form>
-{% else %}<p>Вопросы опубликованного опроса удалить отдельно нельзя. Для изменения вопросов создайте копию опроса.</p>{% endif %}
+{% else %}<p>Структуру опубликованного опроса менять нельзя. Для изменений создайте копию опроса.</p>{% endif %}
 <p><a href="{% url 'surveys_builder:survey_detail' survey.pk %}">Вернуться к опроснику</a></p>
 {% endblock %}

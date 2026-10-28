@@ -5,11 +5,44 @@ from django.core.management import call_command
 from django.test import TestCase
 
 from .forms import ResponseForm
-from .management.commands.seed_demo_survey import DEMO_TITLE
+from .management.commands.seed_demo_survey import DEMO_BLOCKS_TITLE, DEMO_TITLE
 from .models import QuestionsBuilder, SurveyAssignment, SurveyResponse, SurveysBuilder
 
 
 class DemoSurveyTests(TestCase):
+    def test_block_demo_is_separate_complete_and_repeatable(self):
+        call_command('seed_demo_survey', stdout=StringIO())
+        call_command('seed_demo_survey', with_blocks=True, stdout=StringIO())
+        survey = SurveysBuilder.objects.get(title=DEMO_BLOCKS_TITLE)
+        blocks = list(survey.blocks.all())
+        self.assertEqual([block.title for block in blocks], ['О вас', 'Учёба и интересы', 'Планы и оценка'])
+        self.assertEqual([block.questions.count() for block in blocks], [1, 3, 3])
+        self.assertEqual(list(survey.questions.values_list('answer_type', flat=True)), list(QuestionsBuilder.AnswerType.values))
+        self.assertFalse(survey.questions.filter(block=None).exists())
+        self.assertTrue(survey.is_draft)
+        self.assertFalse(survey.assignments.exists())
+        self.assertFalse(SurveysBuilder.objects.get(title=DEMO_TITLE).blocks.exists())
+        blocks[0].description = 'Сохранить пользовательское изменение'
+        blocks[0].save()
+        call_command('seed_demo_survey', with_blocks=True, stdout=StringIO())
+        blocks[0].refresh_from_db()
+        self.assertEqual(blocks[0].description, 'Сохранить пользовательское изменение')
+        self.assertEqual(SurveysBuilder.objects.filter(title=DEMO_BLOCKS_TITLE).count(), 1)
+
+    def test_block_demo_renders_headings_and_all_question_fields(self):
+        staff = get_user_model().objects.create_user(username='block-demo-staff', is_staff=True)
+        call_command('seed_demo_survey', with_blocks=True, author_id=staff.pk, stdout=StringIO())
+        survey = SurveysBuilder.objects.get(title=DEMO_BLOCKS_TITLE)
+        self.client.force_login(staff)
+        response = self.client.get(f'/staff/surveys_builder/{survey.pk}/preview/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.context['form'].sections), 3)
+        for block in survey.blocks.all():
+            self.assertContains(response, block.title)
+            self.assertContains(response, block.description)
+        for question in survey.questions.all():
+            self.assertContains(response, f'name="q_{question.pk}"')
+
     def test_demo_covers_all_types_and_can_be_filled_without_assignments(self):
         call_command('seed_demo_survey', stdout=StringIO())
         survey = SurveysBuilder.objects.get(title=DEMO_TITLE)

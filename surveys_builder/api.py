@@ -14,7 +14,7 @@ from django.shortcuts import get_object_or_404
 from my_study.models import Course, School, Subject
 
 from . import services
-from .api_serializers import (question_data, recipient_data, response_data, submitted_response_data,
+from .api_serializers import (block_data, question_data, recipient_data, response_data, submitted_response_data,
                               survey_data)
 from .forms import AudienceForm
 from .models import QuestionsBuilder, SurveyAssignment, SurveyResponse, SurveysBuilder
@@ -139,7 +139,7 @@ def metadata(request):
         'csrf_token': get_token(request), 'audience_choices': choices,
         'answer_types': [{'value': v, 'label': str(label)} for v, label in QuestionsBuilder.AnswerType.choices],
         'survey_statuses': [{'value': v, 'label': str(label)} for v, label in SurveysBuilder.Status.choices],
-        'limits': {'questions': 100, 'options_min': 2, 'options_max': 50, 'page_size_max': 100},
+        'limits': {'blocks': 50, 'questions': 100, 'options_min': 2, 'options_max': 50, 'page_size_max': 100},
     })
 
 
@@ -244,10 +244,52 @@ def question_input(data, question=None):
     values = {name: data.get(name, getattr(question, name) if question else default)
               for name, default in [('title', ''), ('description', ''), ('answer_type', 'short_text'), ('required', False)]}
     values['options_text'] = '\n'.join(options)
+    block_id = data.get('block_id', question.block_id if question else None)
+    if block_id is not None and (type(block_id) is not int or block_id < 1):
+        raise ApiError('invalid_type', 'block_id: ожидается положительный целый ID или null.')
+    values['block'] = block_id if block_id is not None else ''
     return values
 
 
-QUESTION_FIELDS = ('title', 'description', 'answer_type', 'required', 'options', 'revision')
+QUESTION_FIELDS = ('title', 'description', 'answer_type', 'required', 'options', 'block_id', 'revision')
+
+
+@endpoint('GET', 'POST')
+def blocks(request, pk):
+    if request.method == 'POST':
+        data = payload(request, ('title', 'description', 'revision'))
+        text_fields(data, ('title', 'description'))
+        block = services.save_block(pk, request.user, data, revision(data))
+        return JsonResponse({'revision': block.survey.revision, 'block': block_data(block)}, status=201)
+    survey = get_survey(pk)
+    return JsonResponse({'revision': survey.revision, 'blocks': [block_data(b) for b in survey.blocks.all()]})
+
+
+@endpoint('GET', 'PATCH', 'DELETE')
+def block_detail(request, pk, block_pk):
+    survey = get_survey(pk)
+    block = get_object_or_404(survey.blocks, pk=block_pk)
+    if request.method == 'GET':
+        return JsonResponse({'revision': survey.revision, 'block': block_data(block)})
+    data = payload(request, ('revision',) if request.method == 'DELETE' else ('title', 'description', 'revision'))
+    expected = revision(data)
+    if request.method == 'DELETE':
+        survey = services.block_action(pk, block_pk, request.user, 'delete', expected)
+        return JsonResponse(survey_data(survey, detail=True))
+    text_fields(data, ('title', 'description'))
+    values = {name: data.get(name, getattr(block, name)) for name in ('title', 'description')}
+    block = services.save_block(pk, request.user, values, expected, block_pk)
+    return JsonResponse({'revision': block.survey.revision, 'block': block_data(block)})
+
+
+@endpoint('PUT')
+def block_reorder(request, pk):
+    data = payload(request, ('revision', 'block_ids'))
+    ids = data.get('block_ids')
+    if not isinstance(ids, list) or any(type(i) is not int or i < 1 for i in ids):
+        raise ApiError('invalid_type', 'block_ids: ожидается массив целых ID блоков.')
+    survey = services.reorder_blocks(pk, request.user, ids, revision(data))
+    return JsonResponse(survey_data(survey, detail=True))
 
 
 @endpoint('POST')

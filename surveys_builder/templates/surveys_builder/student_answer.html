@@ -6,10 +6,10 @@
 {% if errors %}<ul role="alert">{% for error in errors %}<li>{{ error }}</li>{% endfor %}</ul>{% endif %}
 {% if read_only %}
 <p>{% if submitted %}Ваш ответ отправлен. Спасибо!{% else %}Приём ответов завершён.{% endif %}</p>
-<dl>{% for question, value in rows %}<dt>{{ question }}</dt><dd>{{ value|linebreaksbr }}</dd>{% endfor %}</dl>
+{% include 'surveys_builder/_response_sections.html' %}
 {% else %}
 <form method="post">{% csrf_token %}<input type="hidden" name="response_revision" value="{{ response_revision }}">
-{{ form.as_p }}
+{% include 'surveys_builder/_response_form.html' %}
 <button type="submit" name="action" value="save" formnovalidate>Сохранить черновик</button>
 <button type="submit" name="action" value="submit">Отправить ответ</button>
 </form>

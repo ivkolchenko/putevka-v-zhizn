@@ -4,12 +4,12 @@ import hashlib
 from django.core import signing
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
-from django.db.models import Max
+from django.db.models import Count, F, Max
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 
-from .forms import AudienceForm, QuestionsBuilderForm, ResponseForm, SurveysBuilderForm
-from .models import QuestionOptions, QuestionsBuilder, SurveyAnswer, SurveyAssignment, SurveyResponse, SurveysBuilder
+from .forms import AudienceForm, QuestionBlockForm, QuestionsBuilderForm, ResponseForm, SurveysBuilderForm
+from .models import QuestionBlock, QuestionOptions, QuestionsBuilder, SurveyAnswer, SurveyAssignment, SurveyResponse, SurveysBuilder
 from .selectors import resolve_audience, student_name
 
 
@@ -105,6 +105,75 @@ def audience_for(survey):
     return resolve_audience(form.cleaned_data)
 
 
+def normalize_question_positions(survey):
+    questions = list(survey.questions.select_related('block'))
+    questions.sort(key=lambda q: (q.block.position if q.block_id else 0,
+                                 q.block_id or 0, q.position, q.pk))
+    for position, question in enumerate(questions, 1):
+        question.position = position
+    QuestionsBuilder.objects.bulk_update(questions, ['position'])
+    return {q.pk: q.position for q in questions}
+
+
+@transaction.atomic
+def save_block(pk, actor, data, revision, block_pk=None):
+    survey = locked_survey(pk, actor)
+    require_draft(survey, revision)
+    if block_pk is None:
+        if survey.blocks.count() >= 50:
+            raise ValidationError('Допускается не более 50 блоков.')
+        block = QuestionBlock(survey=survey, position=(survey.blocks.aggregate(last=Max('position'))['last'] or 0) + 1)
+    else:
+        block = get_object_or_404(survey.blocks, pk=block_pk)
+    form = QuestionBlockForm(data, instance=block)
+    if not form.is_valid():
+        raise InvalidForm(form)
+    block = form.save()
+    changed(survey)
+    return block
+
+
+def write_block_order(survey, blocks):
+    for position, block in enumerate(blocks, 1):
+        block.position = position
+    QuestionBlock.objects.bulk_update(blocks, ['position'])
+    normalize_question_positions(survey)
+    changed(survey)
+
+
+@transaction.atomic
+def block_action(pk, block_pk, actor, action, revision):
+    survey = locked_survey(pk, actor)
+    require_draft(survey, revision)
+    block = get_object_or_404(survey.blocks, pk=block_pk)
+    blocks = list(survey.blocks.all())
+    index = next(i for i, item in enumerate(blocks) if item.pk == block.pk)
+    if action == 'delete':
+        last = survey.questions.aggregate(last=Max('position'))['last'] or 0
+        block.questions.update(block=None, position=F('position') + last)
+        block.delete()
+        blocks.pop(index)
+    elif action in ('up', 'down'):
+        target = index + (-1 if action == 'up' else 1)
+        if 0 <= target < len(blocks):
+            blocks[index], blocks[target] = blocks[target], blocks[index]
+    else:
+        raise ValidationError('Неизвестное действие с блоком.')
+    write_block_order(survey, blocks)
+    return survey
+
+
+@transaction.atomic
+def reorder_blocks(pk, actor, block_ids, revision):
+    survey = locked_survey(pk, actor)
+    require_draft(survey, revision)
+    blocks = {block.pk: block for block in survey.blocks.all()}
+    if len(block_ids) != len(blocks) or set(block_ids) != set(blocks):
+        raise ValidationError('Передайте все блоки этого опроса ровно по одному разу.')
+    write_block_order(survey, [blocks[pk] for pk in block_ids])
+    return survey
+
+
 @transaction.atomic
 def save_question(pk, actor, data, revision, question_pk=None):
     survey = locked_survey(pk, actor)
@@ -118,11 +187,19 @@ def save_question(pk, actor, data, revision, question_pk=None):
         question.position = (survey.questions.aggregate(last=Max('position'))['last'] or 0) + 1
     else:
         question = get_object_or_404(survey.questions, pk=question_pk)
+        if 'block' not in data:
+            data = data.copy()
+            data['block'] = question.block_id or ''
+    original_block = question.block_id
     form = QuestionsBuilderForm(data, instance=question)
     if not form.is_valid():
         raise InvalidForm(form)
-    question = form.save()
+    question = form.save(commit=False)
+    if question_pk is not None and question.block_id != original_block:
+        question.position = (survey.questions.aggregate(last=Max('position'))['last'] or 0) + 1
+    question.save()
     form.save_options(question)
+    question.position = normalize_question_positions(survey)[question.pk]
     changed(survey)
     return question
 
@@ -132,15 +209,15 @@ def question_action(pk, question_pk, actor, action, revision):
     survey = locked_survey(pk, actor)
     require_draft(survey, revision)
     question = get_object_or_404(survey.questions, pk=question_pk)
-    questions = list(survey.questions.all())
+    questions = list(survey.questions.filter(block_id=question.block_id))
     index = next(i for i, q in enumerate(questions) if q.pk == question.pk)
     if action == 'delete':
         question.delete()
         questions.pop(index)
     elif action == 'duplicate':
-        if len(questions) >= 100:
+        if survey.questions.count() >= 100:
             raise ValidationError('Допускается не более 100 вопросов.')
-        copy = QuestionsBuilder.objects.create(survey=survey, title=question.title, description=question.description,
+        copy = QuestionsBuilder.objects.create(survey=survey, block=question.block, title=question.title, description=question.description,
                                                answer_type=question.answer_type, required=question.required, position=index + 1)
         QuestionOptions.objects.bulk_create([
             QuestionOptions(question=copy, text=o.text, position=o.position) for o in question.options.all()
@@ -155,6 +232,7 @@ def question_action(pk, question_pk, actor, action, revision):
     for position, item in enumerate(questions, 1):
         item.position = position
     QuestionsBuilder.objects.bulk_update(questions, ['position'])
+    normalize_question_positions(survey)
     changed(survey)
 
 
@@ -165,6 +243,10 @@ def reorder_questions(pk, actor, question_ids, revision):
     questions = {q.pk: q for q in survey.questions.all()}
     if len(question_ids) != len(questions) or set(question_ids) != set(questions):
         raise ValidationError('Передайте все вопросы этого опроса ровно по одному разу.')
+    ranks = {None: 0, **{block.pk: i for i, block in enumerate(survey.blocks.all(), 1)}}
+    order = [ranks[questions[pk].block_id] for pk in question_ids]
+    if order != sorted(order):
+        raise ValidationError('Вопросы можно переставлять внутри блока. Для перестановки блоков измените их порядок.')
     ordered = []
     for position, question_id in enumerate(question_ids, 1):
         question = questions[question_id]
@@ -181,6 +263,15 @@ def publication_errors(survey):
         errors.append('Укажите название опросника.')
     if survey.deadline and survey.deadline <= timezone.now():
         errors.append('Срок ответа уже истёк.')
+    blocks = list(survey.blocks.annotate(question_count=Count('questions')))
+    block_ids = {block.pk for block in blocks}
+    if len(blocks) > 50:
+        errors.append('Допускается не более 50 блоков.')
+    for block in blocks:
+        if not block.title.strip():
+            errors.append('Укажите название каждого блока.')
+        if not block.question_count:
+            errors.append(f'Блок «{block.title}»: добавьте хотя бы один вопрос или удалите блок.')
     try:
         if not audience_for(survey).exists():
             errors.append('В выборке больше нет получателей.')
@@ -192,6 +283,8 @@ def publication_errors(survey):
     if len(questions) > 100:
         errors.append('Допускается не более 100 вопросов.')
     for index, question in enumerate(questions, 1):
+        if question.block_id and question.block_id not in block_ids:
+            errors.append(f'Вопрос {index}: блок принадлежит другому опросу.')
         if not question.title.strip() or question.answer_type not in QuestionsBuilder.AnswerType.values:
             errors.append(f'Проверьте название и тип вопроса {index}.')
         if question.has_options:
@@ -285,8 +378,10 @@ def copy_survey(pk, actor):
     )
     copy.included_users.set(source.included_users.all())
     copy.excluded_users.set(source.excluded_users.all())
+    blocks = {block.pk: QuestionBlock.objects.create(survey=copy, title=block.title,
+        description=block.description, position=block.position) for block in source.blocks.all()}
     for question in source.questions.prefetch_related('options'):
-        duplicate = QuestionsBuilder.objects.create(survey=copy, title=question.title, description=question.description,
+        duplicate = QuestionsBuilder.objects.create(survey=copy, block=blocks.get(question.block_id), title=question.title, description=question.description,
                                                      answer_type=question.answer_type, required=question.required, position=question.position)
         QuestionOptions.objects.bulk_create([
             QuestionOptions(question=duplicate, text=o.text, position=o.position) for o in question.options.all()
@@ -313,7 +408,7 @@ def save_response(assignment_pk, actor, data, *, final, revision):
         raise ValidationError('Обновите страницу перед сохранением ответа.')
     if expected != (response.revision if response else 0):
         raise RevisionConflict('Ответ изменён в другой вкладке. Обновите страницу.')
-    questions = list(survey.questions.prefetch_related('options'))
+    questions = list(survey.questions.select_related('block').prefetch_related('options'))
     form = ResponseForm(data, questions=questions, final=final)
     if not form.is_valid():
         raise InvalidForm(form)

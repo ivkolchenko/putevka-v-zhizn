@@ -1,0 +1,6 @@
+{% for section in sections %}
+<section class="question-block">
+{% if section.block %}<h2>{{ section.block.title }}</h2>{{ section.block.description|linebreaks }}{% endif %}
+<dl>{% for question, value in section.rows %}<dt>{{ question }}</dt><dd>{{ value|linebreaksbr }}</dd>{% endfor %}</dl>
+</section>
+{% endfor %}

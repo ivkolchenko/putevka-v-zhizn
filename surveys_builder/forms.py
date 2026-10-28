@@ -5,8 +5,8 @@ from django.utils import timezone
 from my_study.models import Course, School, Subject
 from scholar_form.models import UserInfo
 
-from .models import QuestionsBuilder, QuestionOptions, SurveysBuilder
-from .selectors import student_name, student_queryset
+from .models import QuestionBlock, QuestionsBuilder, QuestionOptions, SurveysBuilder
+from .selectors import group_questions, student_name, student_queryset
 
 
 class SurveysBuilderForm(forms.ModelForm):
@@ -30,6 +30,12 @@ class SurveyListFilterForm(forms.Form):
         widget=forms.Select(attrs={'class': 'form-select'}))
 
 
+class QuestionBlockForm(forms.ModelForm):
+    class Meta:
+        model = QuestionBlock
+        fields = ['title', 'description']
+
+
 class QuestionsBuilderForm(forms.ModelForm):
     options_text = forms.CharField(
         label='Варианты ответа', required=False, max_length=10000,
@@ -39,10 +45,14 @@ class QuestionsBuilderForm(forms.ModelForm):
 
     class Meta:
         model = QuestionsBuilder
-        fields = ['title', 'description', 'answer_type', 'required', 'options_text']
+        fields = ['block', 'title', 'description', 'answer_type', 'required', 'options_text']
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, survey=None, **kwargs):
         super().__init__(*args, **kwargs)
+        if survey is None and self.instance.survey_id:
+            survey = self.instance.survey
+        self.fields['block'].queryset = survey.blocks.all() if survey else QuestionBlock.objects.none()
+        self.fields['block'].empty_label = 'Без блока'
         if self.instance.pk:
             self.fields['options_text'].initial = '\n'.join(o.text for o in self.instance.options.all())
 
@@ -143,8 +153,9 @@ class AudienceForm(forms.Form):
 
 class ResponseForm(forms.Form):
     """Одна форма для предпросмотра, черновика и окончательной отправки."""
-    def __init__(self, *args, questions, final=True, **kwargs):
+    def __init__(self, *args, questions, final=True, blocks=None, **kwargs):
         self.questions = list(questions)
+        self.blocks = blocks
         super().__init__(*args, **kwargs)
         for question in self.questions:
             attrs = {'label': question.title, 'help_text': question.description,
@@ -169,6 +180,16 @@ class ResponseForm(forms.Form):
             else:
                 field = forms.TypedChoiceField(choices=([('', 'Без ответа')] if not question.required else []) + [(n, n) for n in range(1, 6)], coerce=int, empty_value=None, widget=forms.RadioSelect, **attrs)
             self.fields[f'q_{question.pk}'] = field
+
+    @property
+    def sections(self):
+        blocks = self.blocks
+        if blocks is None:
+            blocks = sorted({q.block_id: q.block for q in self.questions if q.block_id}.values(),
+                            key=lambda b: (b.position, b.pk))
+        return [{'block': section['block'],
+                 'fields': [self[f'q_{q.pk}'] for q in section['questions']]}
+                for section in group_questions(self.questions, blocks)]
 
     def clean(self):
         data = super().clean()

@@ -6,10 +6,15 @@ from .forms import AudienceForm
 def question_data(question):
     return {
         'id': question.pk, 'title': question.title, 'description': question.description,
+        'block_id': question.block_id,
         'answer_type': question.answer_type, 'required': question.required,
         'position': question.position,
         'options': [{'id': o.pk, 'text': o.text, 'position': o.position} for o in question.options.all()],
     }
+
+
+def block_data(block):
+    return {'id': block.pk, 'title': block.title, 'description': block.description, 'position': block.position}
 
 
 def survey_data(survey, *, detail=False, staff=True):
@@ -26,6 +31,7 @@ def survey_data(survey, *, detail=False, staff=True):
         if detail:
             data['audience'] = AudienceForm.saved_data(survey)
     if detail:
+        data['blocks'] = [block_data(block) for block in survey.blocks.all()]
         data['questions'] = [question_data(q) for q in survey.questions.prefetch_related('options')]
     return data
 

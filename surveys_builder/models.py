@@ -47,6 +47,19 @@ class SurveysBuilder(models.Model):
         return self.status == self.Status.PUBLISHED and (self.deadline is None or self.deadline > timezone.now())
 
 
+class QuestionBlock(models.Model):
+    survey = models.ForeignKey(SurveysBuilder, on_delete=models.CASCADE, related_name='blocks')
+    title = models.CharField('Название блока', max_length=200)
+    description = models.TextField('Описание блока', blank=True, max_length=3000)
+    position = models.PositiveIntegerField('Порядок', default=1)
+
+    class Meta:
+        ordering = ['position', 'pk']
+
+    def __str__(self):
+        return self.title
+
+
 class QuestionsBuilder(models.Model):
     class AnswerType(models.TextChoices):
         SHORT_TEXT = 'short_text', 'Короткий текст'
@@ -58,6 +71,8 @@ class QuestionsBuilder(models.Model):
         SCALE = 'scale', 'Шкала от 1 до 5'
 
     survey = models.ForeignKey(SurveysBuilder, on_delete=models.CASCADE, related_name='questions', verbose_name='Опросник')
+    block = models.ForeignKey(QuestionBlock, null=True, blank=True, on_delete=models.SET_NULL,
+                              related_name='questions', verbose_name='Блок')
     title = models.CharField('Текст вопроса', max_length=500)
     description = models.CharField('Подсказка', max_length=1000, blank=True)
     answer_type = models.CharField('Тип ответа', max_length=20, choices=AnswerType.choices, default=AnswerType.SHORT_TEXT)
@@ -69,6 +84,11 @@ class QuestionsBuilder(models.Model):
 
     def __str__(self):
         return self.title
+
+    def clean(self):
+        super().clean()
+        if self.block_id and self.survey_id and self.block.survey_id != self.survey_id:
+            raise ValidationError({'block': 'Блок должен принадлежать этому опросу.'})
 
     @property
     def has_options(self):

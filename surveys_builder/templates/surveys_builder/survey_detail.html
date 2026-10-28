@@ -2,21 +2,29 @@
 {% block content %}
 <h1>2. Вопросы: {{ survey.title }}</h1>
 {{ survey.description|linebreaks }}
-<ol>{% for question in questions %}
-<li><h2>{{ question.title }}</h2>
-<p>{{ question.get_answer_type_display }}{% if question.required %} · Обязательный{% endif %}</p>
-{{ question.description|linebreaks }}
-{% if question.has_options %}<ul>{% for option in question.options.all %}<li>{{ option.text }}</li>{% endfor %}</ul>{% endif %}
+{% if survey.is_draft %}<p><a href="{% url 'surveys_builder:block_create' survey.pk %}">Добавить блок вопросов</a></p>{% endif %}
+{% for section in sections %}
+<section class="question-block">
+{% if section.block %}
+<h2>{{ section.block.title }}</h2>
+{{ section.block.description|linebreaks }}
 {% if survey.is_draft %}
-<p><a href="{% url 'surveys_builder:question_edit' survey.pk question.pk %}">Изменить</a> ·
-<a href="{% url 'surveys_builder:question_delete' survey.pk question.pk %}">Удалить</a></p>
-<form method="post" action="{% url 'surveys_builder:question_action' survey.pk question.pk 'up' %}">{% csrf_token %}{% include 'surveys_builder/_revision.html' %}<button type="submit">Выше</button></form>
-<form method="post" action="{% url 'surveys_builder:question_action' survey.pk question.pk 'down' %}">{% csrf_token %}{% include 'surveys_builder/_revision.html' %}<button type="submit">Ниже</button></form>
-<form method="post" action="{% url 'surveys_builder:question_action' survey.pk question.pk 'duplicate' %}">{% csrf_token %}{% include 'surveys_builder/_revision.html' %}<button type="submit">Дублировать вопрос</button></form>
-{% endif %}</li>
-{% empty %}<li>Добавьте первый вопрос.</li>{% endfor %}</ol>
+<p><a href="{% url 'surveys_builder:block_edit' survey.pk section.block.pk %}">Изменить блок</a> ·
+<a href="{% url 'surveys_builder:block_delete' survey.pk section.block.pk %}">Удалить блок (вопросы сохранятся)</a> ·
+<a href="?block={{ section.block.pk }}#add-question">Добавить вопрос в блок</a></p>
+<div class="block-actions">
+<form method="post" action="{% url 'surveys_builder:block_action' survey.pk section.block.pk 'up' %}">{% csrf_token %}{% include 'surveys_builder/_revision.html' %}<button type="submit">Блок выше</button></form>
+<form method="post" action="{% url 'surveys_builder:block_action' survey.pk section.block.pk 'down' %}">{% csrf_token %}{% include 'surveys_builder/_revision.html' %}<button type="submit">Блок ниже</button></form>
+</div>
+{% endif %}
+{% else %}<h2>Вопросы без блока</h2>{% endif %}
+<ol>{% for question in section.questions %}
+    <li>{% include 'surveys_builder/_question_card.html' %}</li>
+{% empty %}<li>В блоке пока нет вопросов.</li>{% endfor %}</ol>
+</section>
+{% empty %}<p>Добавьте первый вопрос или создайте блок вопросов.</p>{% endfor %}
 {% if survey.is_draft %}
-<h2>Добавить вопрос</h2>
+<h2 id="add-question">Добавить вопрос</h2>
 <form method="post">{% csrf_token %}{% include 'surveys_builder/_revision.html' %}{{ form.as_p }}<button type="submit">Добавить</button></form>
 <p><a href="{% url 'surveys_builder:preview' survey.pk %}">Далее: проверить и опубликовать</a></p>
 <p><a href="{% url 'surveys_builder:survey_delete' survey.pk %}">Удалить черновик опросника</a></p>

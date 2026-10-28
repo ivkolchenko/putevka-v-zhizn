@@ -1,0 +1,13 @@
+<h3>{{ question.title }}</h3>
+<p>{{ question.get_answer_type_display }}{% if question.required %} · Обязательный{% endif %}</p>
+{{ question.description|linebreaks }}
+{% if question.has_options %}<ul>{% for option in question.options.all %}<li>{{ option.text }}</li>{% endfor %}</ul>{% endif %}
+{% if survey.is_draft %}
+<p><a href="{% url 'surveys_builder:question_edit' survey.pk question.pk %}">Изменить / перенести в другой блок</a> ·
+<a href="{% url 'surveys_builder:question_delete' survey.pk question.pk %}">Удалить вопрос</a></p>
+<div class="block-actions">
+<form method="post" action="{% url 'surveys_builder:question_action' survey.pk question.pk 'up' %}">{% csrf_token %}{% include 'surveys_builder/_revision.html' %}<button type="submit">Вопрос выше</button></form>
+<form method="post" action="{% url 'surveys_builder:question_action' survey.pk question.pk 'down' %}">{% csrf_token %}{% include 'surveys_builder/_revision.html' %}<button type="submit">Вопрос ниже</button></form>
+<form method="post" action="{% url 'surveys_builder:question_action' survey.pk question.pk 'duplicate' %}">{% csrf_token %}{% include 'surveys_builder/_revision.html' %}<button type="submit">Дублировать вопрос</button></form>
+</div>
+{% endif %}

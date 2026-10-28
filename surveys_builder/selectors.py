@@ -5,6 +5,18 @@ from django.db.models import Q
 from my_study.models import CourseSelection
 
 
+def group_questions(questions, blocks):
+    """Вопросы без блока идут первыми; внутри каждого блока сохраняется порядок."""
+    grouped = {None: []}
+    blocks = list(blocks)
+    grouped.update({block.pk: [] for block in blocks})
+    for question in questions:
+        grouped.setdefault(question.block_id, []).append(question)
+    sections = [{'block': None, 'questions': grouped[None]}] if grouped[None] else []
+    sections.extend({'block': block, 'questions': grouped[block.pk]} for block in blocks)
+    return sections
+
+
 def student_queryset():
     return get_user_model().objects.filter(is_staff=False, is_superuser=False).select_related('user_info')
 

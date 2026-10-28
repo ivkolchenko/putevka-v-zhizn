@@ -5,10 +5,16 @@ from django.db import transaction
 from django.urls import reverse
 
 from surveys_builder.forms import QuestionsBuilderForm
-from surveys_builder.models import QuestionsBuilder, SurveysBuilder
+from surveys_builder.models import QuestionBlock, QuestionsBuilder, SurveysBuilder
 
 
 DEMO_TITLE = 'Тестовый опрос — все типы вопросов'
+DEMO_BLOCKS_TITLE = 'Тестовый опрос с блоками — все типы вопросов'
+DEMO_BLOCKS = [
+    ('О вас', 'Короткое знакомство с участником опроса.', range(1, 2)),
+    ('Учёба и интересы', 'Расскажите о занятиях, удобном формате и любимых предметах.', range(2, 5)),
+    ('Планы и оценка', 'Укажите нагрузку, удобную дату начала и оцените занятия.', range(5, 8)),
+]
 DEMO_QUESTIONS = [
     {'title': 'Как вас зовут?', 'answer_type': 'short_text', 'required': True,
      'description': 'Короткий текст. Например: Анна Иванова.'},
@@ -33,10 +39,13 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument('--author-id', type=int, help='ID активного сотрудника — автора опроса.')
+        parser.add_argument('--with-blocks', action='store_true', help='Создать отдельный пример с тремя блоками вопросов.')
 
     @transaction.atomic
     def handle(self, *args, **options):
-        survey = SurveysBuilder.objects.filter(title=DEMO_TITLE).first()
+        with_blocks = options.get('with_blocks', False)
+        title = DEMO_BLOCKS_TITLE if with_blocks else DEMO_TITLE
+        survey = SurveysBuilder.objects.filter(title=title).first()
         if survey:
             self.stdout.write(f'Тестовый опрос #{survey.pk} уже существует. Данные оставлены без изменений.')
         else:
@@ -47,13 +56,20 @@ class Command(BaseCommand):
                 if not authors.exists():
                     raise CommandError('Автор должен быть активным сотрудником.')
             survey = SurveysBuilder.objects.create(
-                title=DEMO_TITLE, author=authors.first(),
+                title=title, author=authors.first(),
                 description='Демонстрационный опрос: все 7 типов вопросов, варианты выбора, '
                             'обязательные и необязательные ответы. Получатели не назначены. '
                             'Откройте предпросмотр, чтобы попробовать заполнение без сохранения и отправки.',
             )
+            question_blocks = {}
+            if with_blocks:
+                for position, (block_title, description, question_positions) in enumerate(DEMO_BLOCKS, 1):
+                    block = QuestionBlock.objects.create(survey=survey, title=block_title,
+                        description=description, position=position)
+                    question_blocks.update({index: block.pk for index in question_positions})
             for position, data in enumerate(DEMO_QUESTIONS, 1):
-                form = QuestionsBuilderForm(data, instance=QuestionsBuilder(survey=survey, position=position))
+                values = {**data, 'block': question_blocks.get(position, '')}
+                form = QuestionsBuilderForm(values, instance=QuestionsBuilder(survey=survey, position=position))
                 if not form.is_valid():
                     raise CommandError(f'Некорректный демонстрационный вопрос {position}: {form.errors.as_text()}')
                 question = form.save()
