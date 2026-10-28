@@ -14,6 +14,7 @@ from django.test import Client, TestCase, TransactionTestCase
 from django.urls import reverse
 from django.utils import timezone
 
+from core.models import Notification, UserNotification
 from my_study.models import Course, CourseSelection, School, Subject
 from scholar_form.models import UserInfo
 from . import services
@@ -124,6 +125,39 @@ class SurveyTests(TestCase):
                                   {'action': 'submit', 'response_revision': 0, f'q_{question.pk}': '5'})
         self.assertRedirects(result, reverse('student_surveys:answer', args=[assignment.pk]))
         self.assertEqual(assignment.response.answers.get().value, 5)
+
+    def test_publication_notifies_each_assigned_student_once(self):
+        survey = self.make_survey()
+        survey.included_users.add(self.other)
+        self.publish(survey)
+        notification = Notification.objects.get(message__contains=survey.title)
+        self.assertEqual(notification.sender, self.staff)
+        self.assertEqual(
+            set(UserNotification.objects.filter(notification=notification).values_list('recipient_id', flat=True)),
+            {self.student.pk, self.other.pk},
+        )
+        self.assertFalse(UserNotification.objects.filter(notification=notification, is_seen=True).exists())
+
+        self.client.force_login(self.student)
+        inbox = self.client.get(reverse('notifications'))
+        self.assertContains(inbox, notification.message)
+        self.assertEqual(inbox.context['unread_notifications_count'], 1)
+
+        services.publish_survey(survey.pk, self.staff, None)
+        self.assertEqual(Notification.objects.count(), 1)
+        self.assertEqual(UserNotification.objects.count(), 2)
+
+    def test_notification_failure_rolls_back_publication(self):
+        survey = self.make_survey()
+        ids = list(services.audience_for(survey).values_list('pk', flat=True))
+        token = services.publish_token(survey, self.staff, ids)
+        with patch.object(UserNotification.objects, 'bulk_create', side_effect=RuntimeError('test')):
+            with self.assertRaises(RuntimeError):
+                services.publish_survey(survey.pk, self.staff, token)
+        survey.refresh_from_db()
+        self.assertTrue(survey.is_draft)
+        self.assertFalse(survey.assignments.exists())
+        self.assertFalse(Notification.objects.exists())
 
     def test_no_question_creation_before_audience(self):
         survey = services.create_survey(self.staff, {'title': 'Новый'})

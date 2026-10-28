@@ -7,7 +7,7 @@ from django.contrib.admin.views.decorators import staff_member_required
 from django.core.exceptions import ValidationError
 from django.core.paginator import Paginator
 from django.db.models import Count, Q
-from django.http import StreamingHttpResponse
+from django.http import Http404, StreamingHttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_http_methods, require_POST
 
@@ -256,7 +256,19 @@ def survey_delete(request, pk):
 def preview(request, pk):
     survey = get_survey(pk)
     questions = list(survey.questions.select_related('block').prefetch_related('options'))
-    form = ResponseForm(request.POST if request.method == 'POST' else None, questions=questions, blocks=survey.blocks.all())
+    sections = group_questions(questions, survey.blocks.all()) or [{'block': None, 'questions': []}]
+    try:
+        block_page = int(request.GET.get('block_page', '1'))
+    except (TypeError, ValueError):
+        raise Http404
+    if not 1 <= block_page <= len(sections):
+        raise Http404
+    current_section = sections[block_page - 1]
+    form = ResponseForm(
+        request.POST if request.method == 'POST' else None,
+        questions=current_section['questions'],
+        blocks=[current_section['block']] if current_section['block'] else [],
+    )
     if request.method == 'POST' and form.is_valid():
         messages.success(request, 'Проверка пройдена. Это предпросмотр: ответы не сохранялись.')
     errors = services.publication_errors(survey) if survey.is_draft else []
@@ -265,8 +277,21 @@ def preview(request, pk):
     token = services.publish_token(survey, request.user, ids) if survey.is_draft and not errors else None
     recipient_page = Paginator(recipients, 50).get_page(request.GET.get('page')) if recipients is not None else None
     recipient_rows = [(student_name(u), u.get_username()) for u in recipient_page] if recipient_page is not None else []
-    return page(request, 'preview.html', survey, form=form, errors=errors, publish_token=token,
-                page_obj=recipient_page, recipients=recipient_rows)
+    return page(
+        request,
+        'preview.html',
+        survey,
+        form=form,
+        errors=errors,
+        publish_token=token,
+        page_obj=recipient_page,
+        recipients=recipient_rows,
+        block_page=block_page,
+        block_count=len(sections),
+        previous_block_page=block_page - 1 if block_page > 1 else None,
+        next_block_page=block_page + 1 if block_page < len(sections) else None,
+        pagination_query=f'block_page={block_page}',
+    )
 
 
 @staff_member_required

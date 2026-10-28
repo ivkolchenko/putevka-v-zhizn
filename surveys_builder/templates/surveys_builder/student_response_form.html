@@ -1,7 +1,7 @@
 {% for error in form.non_field_errors %}<div class="alert alert-danger" role="alert">{{ error }}</div>{% endfor %}
 {% for section in form.sections %}
     <fieldset class="card shadow-sm mb-3">
-        {% if section.block %}<legend class="h5 px-3 pt-3 mb-0">{{ section.block.title }}</legend>{% endif %}
+        <legend class="h5 px-3 pt-3 mb-0">{% if section.block %}{{ section.block.title }}{% else %}Общие вопросы{% endif %}</legend>
         <div class="card-body">
             {% if section.block.description %}<div class="text-muted mb-3">{{ section.block.description|linebreaks }}</div>{% endif %}
             {% for field in section.fields %}

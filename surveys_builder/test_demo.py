@@ -29,19 +29,23 @@ class DemoSurveyTests(TestCase):
         self.assertEqual(blocks[0].description, 'Сохранить пользовательское изменение')
         self.assertEqual(SurveysBuilder.objects.filter(title=DEMO_BLOCKS_TITLE).count(), 1)
 
-    def test_block_demo_renders_headings_and_all_question_fields(self):
+    def test_block_demo_renders_one_block_per_preview_page(self):
         staff = get_user_model().objects.create_user(username='block-demo-staff', is_staff=True)
         call_command('seed_demo_survey', with_blocks=True, author_id=staff.pk, stdout=StringIO())
         survey = SurveysBuilder.objects.get(title=DEMO_BLOCKS_TITLE)
         self.client.force_login(staff)
-        response = self.client.get(f'/staff/surveys_builder/{survey.pk}/preview/')
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(len(response.context['form'].sections), 3)
-        for block in survey.blocks.all():
+        blocks = list(survey.blocks.all())
+        for index, block in enumerate(blocks, 1):
+            response = self.client.get(f'/staff/surveys_builder/{survey.pk}/preview/?block_page={index}')
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(len(response.context['form'].sections), 1)
             self.assertContains(response, block.title)
             self.assertContains(response, block.description)
-        for question in survey.questions.all():
-            self.assertContains(response, f'name="q_{question.pk}"')
+            for question in survey.questions.all():
+                if question.block_id == block.pk:
+                    self.assertContains(response, f'name="q_{question.pk}"')
+                else:
+                    self.assertNotContains(response, f'name="q_{question.pk}"')
 
     def test_demo_covers_all_types_and_can_be_filled_without_assignments(self):
         call_command('seed_demo_survey', stdout=StringIO())

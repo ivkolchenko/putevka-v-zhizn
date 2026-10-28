@@ -3,7 +3,10 @@
 <h1>3. Проверка и публикация: {{ survey.title }}</h1>
 {{ survey.description|linebreaks }}
 <h2>Предпросмотр вопросов</h2>
-<form method="post">{% csrf_token %}{% include 'surveys_builder/_response_form.html' %}<button type="submit">Проверить заполнение (без сохранения)</button></form>
+<p>Блок {{ block_page }} из {{ block_count }}</p>
+<form method="post" action="?block_page={{ block_page }}">{% csrf_token %}{% include 'surveys_builder/_response_form.html' %}<button type="submit">Проверить заполнение (без сохранения)</button></form>
+{% if previous_block_page %}<p><a href="?block_page={{ previous_block_page }}">← Предыдущий блок</a></p>{% endif %}
+{% if next_block_page %}<p><a href="?block_page={{ next_block_page }}">Следующий блок →</a></p>{% endif %}
 {% if errors %}<h2>До публикации нужно исправить</h2><ul>{% for error in errors %}<li>{{ error }}</li>{% endfor %}</ul>{% endif %}
 {% if page_obj %}
 <h2>Получатели: {{ page_obj.paginator.count }}</h2>

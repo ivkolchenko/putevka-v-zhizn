@@ -62,7 +62,7 @@
         </a>
     {% endif %}
 
-    <a class="list-group-item list-group-item-action" href="{% url 'student_surveys:list' %}">Опросы</a>
+    <a class="list-group-item list-group-item-action d-flex align-items-center {% if active == 'surveys' %} active{% endif %}" href="{% url 'student_surveys:list' %}">Опросы</a>
     {% if user.is_staff %}<a class="list-group-item list-group-item-action" href="{% url 'staff_surveys_list' %}">Все опросы</a>{% endif %}
 
     <a class="list-group-item list-group-item-action d-flex align-items-center {% if active == 'feedback' %} active{% endif %}"
@@ -145,7 +145,7 @@
             </a>
         {% endif %}
 
-        <a href="{% url 'student_surveys:list' %}" class="text-center text-secondary"><div class="small">Опросы</div></a>
+        <a href="{% url 'student_surveys:list' %}" class="text-center {% if active == 'surveys' %}text-primary{% else %}text-secondary{% endif %}"><div class="small">Опросы</div></a>
         {% if user.is_staff %}<a href="{% url 'staff_surveys_list' %}" class="text-center text-secondary"><div class="small">Все опросы</div></a>{% endif %}
 
         <a href="{% url 'feedback' %}"
