@@ -1,0 +1,342 @@
+"""Все изменения выполняются здесь: права, этапы, транзакции и версии записей."""
+import hashlib
+
+from django.core import signing
+from django.core.exceptions import PermissionDenied, ValidationError
+from django.db import transaction
+from django.db.models import Max
+from django.shortcuts import get_object_or_404
+from django.utils import timezone
+
+from .forms import AudienceForm, QuestionsBuilderForm, ResponseForm, SurveysBuilderForm
+from .models import QuestionOptions, QuestionsBuilder, SurveyAnswer, SurveyAssignment, SurveyResponse, SurveysBuilder
+from .selectors import resolve_audience, student_name
+
+
+class InvalidForm(Exception):
+    def __init__(self, form):
+        self.form = form
+        super().__init__('Проверьте поля формы.')
+
+
+class RevisionConflict(ValidationError):
+    """Клиент пытается перезаписать уже изменённые данные."""
+
+
+def require_staff(actor):
+    if not actor.is_authenticated or not actor.is_active or not actor.is_staff:
+        raise PermissionDenied('Доступ только сотрудникам.')
+
+
+def locked_survey(pk, actor):
+    require_staff(actor)
+    return get_object_or_404(SurveysBuilder.objects.select_for_update(), pk=pk)
+
+
+def check_revision(obj, expected):
+    try:
+        matches = int(expected) == obj.revision
+    except (TypeError, ValueError):
+        matches = False
+    if not matches:
+        raise RevisionConflict('Данные уже изменились. Обновите страницу и повторите действие.')
+
+
+def require_draft(survey, expected):
+    check_revision(survey, expected)
+    if not survey.is_draft:
+        raise ValidationError('Опубликованный опросник менять нельзя. Создайте его копию.')
+
+
+def changed(survey):
+    survey.revision += 1
+    survey.save()
+
+
+@transaction.atomic
+def create_survey(actor, data):
+    require_staff(actor)
+    form = SurveysBuilderForm(data)
+    if not form.is_valid():
+        raise InvalidForm(form)
+    survey = form.save(commit=False)
+    survey.author = actor
+    survey.save()
+    return survey
+
+
+@transaction.atomic
+def update_survey(pk, actor, data, revision):
+    survey = locked_survey(pk, actor)
+    require_draft(survey, revision)
+    form = SurveysBuilderForm(data, instance=survey)
+    if not form.is_valid():
+        raise InvalidForm(form)
+    form.save(commit=False)
+    changed(survey)
+    return survey
+
+
+@transaction.atomic
+def save_audience(pk, actor, data, revision):
+    survey = locked_survey(pk, actor)
+    require_draft(survey, revision)
+    form = AudienceForm(data)
+    if not form.is_valid():
+        raise InvalidForm(form)
+    if not resolve_audience(form.cleaned_data).exists():
+        form.add_error(None, 'Не найдено получателей. Измените условия или список учеников.')
+        raise InvalidForm(form)
+    survey.audience_mode = form.cleaned_data['mode']
+    survey.audience_filters = form.serialized_filters()
+    survey.included_users.set(form.cleaned_data['included_users'])
+    survey.excluded_users.set(form.cleaned_data['excluded_users'])
+    survey.audience_configured = True
+    changed(survey)
+    return survey
+
+
+def audience_for(survey):
+    if not survey.audience_configured:
+        raise ValidationError('Сначала сохраните получателей на первом этапе.')
+    form = AudienceForm(AudienceForm.saved_data(survey))
+    if not form.is_valid():
+        raise ValidationError('Состав справочников изменился. Проверьте и заново сохраните получателей.')
+    return resolve_audience(form.cleaned_data)
+
+
+@transaction.atomic
+def save_question(pk, actor, data, revision, question_pk=None):
+    survey = locked_survey(pk, actor)
+    require_draft(survey, revision)
+    if not survey.audience_configured:
+        raise ValidationError('Сначала выберите получателей.')
+    if question_pk is None:
+        if survey.questions.count() >= 100:
+            raise ValidationError('Допускается не более 100 вопросов.')
+        question = QuestionsBuilder(survey=survey)
+        question.position = (survey.questions.aggregate(last=Max('position'))['last'] or 0) + 1
+    else:
+        question = get_object_or_404(survey.questions, pk=question_pk)
+    form = QuestionsBuilderForm(data, instance=question)
+    if not form.is_valid():
+        raise InvalidForm(form)
+    question = form.save()
+    form.save_options(question)
+    changed(survey)
+    return question
+
+
+@transaction.atomic
+def question_action(pk, question_pk, actor, action, revision):
+    survey = locked_survey(pk, actor)
+    require_draft(survey, revision)
+    question = get_object_or_404(survey.questions, pk=question_pk)
+    questions = list(survey.questions.all())
+    index = next(i for i, q in enumerate(questions) if q.pk == question.pk)
+    if action == 'delete':
+        question.delete()
+        questions.pop(index)
+    elif action == 'duplicate':
+        if len(questions) >= 100:
+            raise ValidationError('Допускается не более 100 вопросов.')
+        copy = QuestionsBuilder.objects.create(survey=survey, title=question.title, description=question.description,
+                                               answer_type=question.answer_type, required=question.required, position=index + 1)
+        QuestionOptions.objects.bulk_create([
+            QuestionOptions(question=copy, text=o.text, position=o.position) for o in question.options.all()
+        ])
+        questions.insert(index + 1, copy)
+    elif action in ('up', 'down'):
+        target = index + (-1 if action == 'up' else 1)
+        if 0 <= target < len(questions):
+            questions[index], questions[target] = questions[target], questions[index]
+    else:
+        raise ValidationError('Неизвестное действие с вопросом.')
+    for position, item in enumerate(questions, 1):
+        item.position = position
+    QuestionsBuilder.objects.bulk_update(questions, ['position'])
+    changed(survey)
+
+
+@transaction.atomic
+def reorder_questions(pk, actor, question_ids, revision):
+    survey = locked_survey(pk, actor)
+    require_draft(survey, revision)
+    questions = {q.pk: q for q in survey.questions.all()}
+    if len(question_ids) != len(questions) or set(question_ids) != set(questions):
+        raise ValidationError('Передайте все вопросы этого опроса ровно по одному разу.')
+    ordered = []
+    for position, question_id in enumerate(question_ids, 1):
+        question = questions[question_id]
+        question.position = position
+        ordered.append(question)
+    QuestionsBuilder.objects.bulk_update(ordered, ['position'])
+    changed(survey)
+    return survey
+
+
+def publication_errors(survey):
+    errors = []
+    if not survey.title.strip():
+        errors.append('Укажите название опросника.')
+    if survey.deadline and survey.deadline <= timezone.now():
+        errors.append('Срок ответа уже истёк.')
+    try:
+        if not audience_for(survey).exists():
+            errors.append('В выборке больше нет получателей.')
+    except ValidationError as error:
+        errors.extend(error.messages)
+    questions = list(survey.questions.prefetch_related('options'))
+    if not questions:
+        errors.append('Добавьте хотя бы один вопрос.')
+    if len(questions) > 100:
+        errors.append('Допускается не более 100 вопросов.')
+    for index, question in enumerate(questions, 1):
+        if not question.title.strip() or question.answer_type not in QuestionsBuilder.AnswerType.values:
+            errors.append(f'Проверьте название и тип вопроса {index}.')
+        if question.has_options:
+            texts = [o.text.strip() for o in question.options.all()]
+            if not 2 <= len(texts) <= 50 or len(texts) != len(set(texts)) or any(not t or len(t) > 200 for t in texts):
+                errors.append(f'Вопрос {index}: нужны от 2 до 50 непустых, разных вариантов.')
+    return errors
+
+
+def audience_fingerprint(ids):
+    return hashlib.sha256(','.join(map(str, sorted(ids))).encode()).hexdigest()
+
+
+def publish_token(survey, actor, ids):
+    return signing.dumps({'survey': survey.pk, 'actor': actor.pk, 'revision': survey.revision,
+                          'audience': audience_fingerprint(ids)}, salt='surveys-builder.publish')
+
+
+@transaction.atomic
+def publish_survey(pk, actor, token):
+    survey = locked_survey(pk, actor)
+    # Повтор отправки того же действия не создаёт вторых назначений.
+    if survey.status == SurveysBuilder.Status.PUBLISHED:
+        return survey
+    if not survey.is_draft:
+        raise ValidationError('Этот опросник нельзя опубликовать повторно.')
+    try:
+        confirmation = signing.loads(token, salt='surveys-builder.publish', max_age=3600)
+    except (signing.BadSignature, TypeError):
+        raise ValidationError('Подтверждение публикации устарело. Откройте предпросмотр заново.')
+    if confirmation.get('survey') != survey.pk or confirmation.get('actor') != actor.pk:
+        raise ValidationError('Неверное подтверждение публикации.')
+    check_revision(survey, confirmation.get('revision'))
+    errors = publication_errors(survey)
+    if errors:
+        raise ValidationError(errors)
+    users = list(audience_for(survey))
+    if confirmation.get('audience') != audience_fingerprint([u.pk for u in users]):
+        raise ValidationError('Получатели изменились после предпросмотра. Проверьте список заново.')
+    assignments = []
+    for user in users:
+        info = getattr(user, 'user_info', None)
+        assignments.append(SurveyAssignment(survey=survey, user=user, recipient_snapshot={
+            'name': student_name(user), 'username': user.get_username(),
+            'grade': info.next_year_class_digit if info else None,
+            'profile': info.internal_study_profile if info else None,
+            'status': info.status if info else None,
+        }))
+    SurveyAssignment.objects.bulk_create(assignments)
+    survey.status = SurveysBuilder.Status.PUBLISHED
+    survey.published_at = timezone.now()
+    changed(survey)
+    return survey
+
+
+@transaction.atomic
+def change_status(pk, actor, action, revision):
+    survey = locked_survey(pk, actor)
+    check_revision(survey, revision)
+    if action == 'close' and survey.status == SurveysBuilder.Status.PUBLISHED:
+        survey.status = SurveysBuilder.Status.CLOSED
+        survey.closed_at = timezone.now()
+    elif action == 'archive' and survey.status in (SurveysBuilder.Status.PUBLISHED, SurveysBuilder.Status.CLOSED):
+        survey.status = SurveysBuilder.Status.ARCHIVED
+        survey.closed_at = survey.closed_at or timezone.now()
+    else:
+        raise ValidationError('Недопустимый переход состояния опросника.')
+    changed(survey)
+    return survey
+
+
+@transaction.atomic
+def delete_survey(pk, actor, revision, *, allow_published=False):
+    survey = locked_survey(pk, actor)
+    if allow_published:
+        check_revision(survey, revision)
+        # Ответы удаляются через назначения перед защищёнными вопросами опроса.
+        survey.assignments.all().delete()
+    else:
+        require_draft(survey, revision)
+    survey.delete()
+
+
+@transaction.atomic
+def copy_survey(pk, actor):
+    source = locked_survey(pk, actor)
+    copy = SurveysBuilder.objects.create(
+        author=actor, title=source.title[:192] + ' (копия)', description=source.description,
+        audience_mode=source.audience_mode, audience_filters=source.audience_filters,
+        audience_configured=source.audience_configured,
+    )
+    copy.included_users.set(source.included_users.all())
+    copy.excluded_users.set(source.excluded_users.all())
+    for question in source.questions.prefetch_related('options'):
+        duplicate = QuestionsBuilder.objects.create(survey=copy, title=question.title, description=question.description,
+                                                     answer_type=question.answer_type, required=question.required, position=question.position)
+        QuestionOptions.objects.bulk_create([
+            QuestionOptions(question=duplicate, text=o.text, position=o.position) for o in question.options.all()
+        ])
+    return copy
+
+
+@transaction.atomic
+def save_response(assignment_pk, actor, data, *, final, revision):
+    if not actor.is_authenticated or not actor.is_active:
+        raise PermissionDenied
+    # Во всех операциях сначала блокируется опрос, затем назначение/ответ.
+    assignment = get_object_or_404(SurveyAssignment, pk=assignment_pk, user=actor)
+    survey = get_object_or_404(SurveysBuilder.objects.select_for_update(), pk=assignment.survey_id)
+    assignment = get_object_or_404(SurveyAssignment.objects.select_for_update(), pk=assignment.pk)
+    if not survey.accepts_answers:
+        raise ValidationError('Приём ответов завершён или опрос недоступен.')
+    response = SurveyResponse.objects.filter(assignment=assignment).first()
+    if response and response.status == SurveyResponse.Status.SUBMITTED:
+        raise ValidationError('Ответ уже отправлен и не может быть изменён.')
+    try:
+        expected = int(revision)
+    except (TypeError, ValueError):
+        raise ValidationError('Обновите страницу перед сохранением ответа.')
+    if expected != (response.revision if response else 0):
+        raise RevisionConflict('Ответ изменён в другой вкладке. Обновите страницу.')
+    questions = list(survey.questions.prefetch_related('options'))
+    form = ResponseForm(data, questions=questions, final=final)
+    if not form.is_valid():
+        raise InvalidForm(form)
+    if response is None:
+        response = SurveyResponse.objects.create(assignment=assignment)
+    else:
+        response.revision += 1
+    values = form.answer_values()
+    for question in questions:
+        SurveyAnswer.objects.update_or_create(response=response, question=question,
+                                             defaults={'value': values[question.pk]})
+    if final:
+        response.status = SurveyResponse.Status.SUBMITTED
+        response.submitted_at = timezone.now()
+    response.save()
+    return response
+
+
+def answer_display(question, value):
+    if value is None or value == '' or value == []:
+        return '—'
+    if question.has_options:
+        labels = {o.pk: o.text for o in question.options.all()}
+        ids = value if isinstance(value, list) else [value]
+        return '; '.join(labels.get(pk, '[вариант удалён]') for pk in ids)
+    return str(value)

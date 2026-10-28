@@ -1,0 +1,17 @@
+{% extends 'surveys_builder/base.html' %}
+{% block content %}
+<h1>Результаты: {{ survey.title }}</h1>
+<p>Получателей: {{ counts.total }}. Ответили: {{ counts.submitted }}. Сохранили черновик: {{ counts.started }}. Не начинали: {{ counts.not_started }}.</p>
+<p>Содержание черновиков ответов сотрудникам не показывается.</p>
+<p><a href="{% url 'surveys_builder:results_csv' survey.pk %}">Скачать отправленные ответы в CSV</a></p>
+{% if survey.status == 'published' %}<p><a href="{% url 'surveys_builder:lifecycle' survey.pk 'close' %}">Завершить приём ответов</a></p>{% endif %}
+{% if survey.status == 'published' or survey.status == 'closed' %}<p><a href="{% url 'surveys_builder:lifecycle' survey.pk 'archive' %}">Переместить в архив</a></p>{% endif %}
+<form method="post" action="{% url 'surveys_builder:survey_copy' survey.pk %}">{% csrf_token %}<button type="submit">Создать копию опросника</button></form>
+<table><thead><tr><th>Получатель на момент публикации</th><th>Состояние ответа</th></tr></thead><tbody>
+{% for item in page_obj %}<tr><td>{{ item.recipient_snapshot.name }} ({{ item.recipient_snapshot.username }})</td><td>
+{% if item.response.status == 'submitted' %}<a href="{% url 'surveys_builder:response_detail' survey.pk item.response.pk %}">Отправлен {{ item.response.submitted_at }}</a>
+{% elif item.response %}Черновик{% else %}Не начат{% endif %}
+</td></tr>{% empty %}<tr><td colspan="2">Получатели появятся после публикации.</td></tr>{% endfor %}
+</tbody></table>
+{% include 'surveys_builder/_pagination.html' %}
+{% endblock %}

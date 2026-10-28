@@ -1,201 +1,24 @@
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{{ survey.title }}</title>
-
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            background-color: #f7f9fc;
-            color: #212529;
-            max-width: 1000px;
-            margin: 30px auto;
-            padding: 0 20px;
-        }
-
-        h1 {
-            font-size: 32px;
-            margin: 0 0 10px;
-        }
-
-        h2 {
-            margin-top: 30px;
-        }
-
-        a {
-            color: #0d6efd;
-            text-decoration: none;
-        }
-
-        a:hover {
-            text-decoration: underline;
-        }
-
-        article {
-            background-color: white;
-            border: 1px solid #ddd;
-            padding: 18px;
-            margin-bottom: 15px;
-        }
-
-        form {
-            background-color: white;
-            border: 1px solid #ddd;
-            padding: 20px;
-            margin-top: 20px;
-        }
-
-        input,
-        textarea,
-        select {
-            width: 100%;
-            padding: 8px;
-            margin: 5px 0 15px;
-            border: 1px solid #ccc;
-            box-sizing: border-box;
-        }
-
-        input[type="checkbox"] {
-            width: auto;
-            padding: 0;
-            margin: 0 0 0 5px;
-            border: none;
-            vertical-align: middle;
-        }
-
-        textarea {
-            min-height: 100px;
-        }
-
-        button {
-            background-color: #0d6efd;
-            color: white;
-            border: none;
-            padding: 8px 15px;
-            cursor: pointer;
-        }
-
-        button:hover {
-            background-color: #0b5ed7;
-        }
-
-        .page-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            gap: 20px;
-            margin-top: 20px;
-        }
-
-        .btn-delete {
-            display: inline-block;
-            background-color: #dc3545;
-            color: white;
-            border: none;
-            padding: 12px 25px;
-            font-size: 16px;
-            cursor: pointer;
-            white-space: nowrap;
-        }
-
-        .btn-delete:hover {
-            background-color: #bb2d3b;
-            color: white;
-            text-decoration: none;
-        }
-
-        [role="status"] {
-            background-color: #cff4fc;
-            border: 1px solid #b6effb;
-            padding: 10px;
-            color: #055160;
-        }
-
-        hr {
-            border: none;
-            border-top: 1px solid #ddd;
-            margin: 25px 0;
-        }
-
-        .question-actions {
-            margin-top: 10px;
-        }
-
-        .question-actions a {
-            margin-right: 15px;
-        }
-    </style>
-</head>
-<body>
-    <a href="{% url 'surveys_builder:constructor' %}">
-        ← К списку опросников
-    </a>
-
-    {% for message in messages %}
-        <p role="status">{{ message }}</p>
-    {% endfor %}
-
-    <div class="page-header">
-        <div>
-            <h1>{{ survey.title }}</h1>
-            <p>{{ survey.description|default:"Описание не добавлено" }}</p>
-        </div>
-        <a class="btn-delete" href="{% url 'surveys_builder:survey_delete' pk=survey.pk %}">
-            Удалить опросник
-        </a>
-    </div>
-
-    <hr>
-
-    <h2>Вопросы</h2>
-
-{% for question in survey.questions.all %}
-    <article>
-        <h3>
-            {{ forloop.counter }}. {{ question.title }}
-
-            {% if question.required %}
-                <span style="color: #dc3545;">*</span>
-            {% endif %}
-        </h3>
-
-        <p>Тип ответа: {{ question.get_answer_type_display }}</p>
-
-        {% if question.answer_type == "single_choice" %}
-    <ul>
-        {% for option in question.options.all %}
-            <li>{{ option.text }}</li>
-        {% endfor %}
-    </ul>
-{% endif %}
-
-        <div class="question-actions">
-            <a href="{% url 'surveys_builder:question_edit' pk=survey.pk question_pk=question.pk %}">
-                Редактировать
-            </a>
-            <a href="{% url 'surveys_builder:question_delete' pk=survey.pk question_pk=question.pk %}"
-               style="color: #dc3545;">
-                Удалить
-            </a>
-        </div>
-    </article>
-{% empty %}
-    <p>В этом опроснике пока нет вопросов.</p>
-{% endfor %}
-
-<hr>
-
+{% extends 'surveys_builder/base.html' %}
+{% block content %}
+<h1>2. Вопросы: {{ survey.title }}</h1>
+{{ survey.description|linebreaks }}
+<ol>{% for question in questions %}
+<li><h2>{{ question.title }}</h2>
+<p>{{ question.get_answer_type_display }}{% if question.required %} · Обязательный{% endif %}</p>
+{{ question.description|linebreaks }}
+{% if question.has_options %}<ul>{% for option in question.options.all %}<li>{{ option.text }}</li>{% endfor %}</ul>{% endif %}
+{% if survey.is_draft %}
+<p><a href="{% url 'surveys_builder:question_edit' survey.pk question.pk %}">Изменить</a> ·
+<a href="{% url 'surveys_builder:question_delete' survey.pk question.pk %}">Удалить</a></p>
+<form method="post" action="{% url 'surveys_builder:question_action' survey.pk question.pk 'up' %}">{% csrf_token %}{% include 'surveys_builder/_revision.html' %}<button type="submit">Выше</button></form>
+<form method="post" action="{% url 'surveys_builder:question_action' survey.pk question.pk 'down' %}">{% csrf_token %}{% include 'surveys_builder/_revision.html' %}<button type="submit">Ниже</button></form>
+<form method="post" action="{% url 'surveys_builder:question_action' survey.pk question.pk 'duplicate' %}">{% csrf_token %}{% include 'surveys_builder/_revision.html' %}<button type="submit">Дублировать вопрос</button></form>
+{% endif %}</li>
+{% empty %}<li>Добавьте первый вопрос.</li>{% endfor %}</ol>
+{% if survey.is_draft %}
 <h2>Добавить вопрос</h2>
-
-<form method="post">
-    {% csrf_token %}
-
-    {{ form.as_p }}
-
-    <button type="submit">Добавить вопрос</button>
-</form>
-
-</body>
-</html>
+<form method="post">{% csrf_token %}{% include 'surveys_builder/_revision.html' %}{{ form.as_p }}<button type="submit">Добавить</button></form>
+<p><a href="{% url 'surveys_builder:preview' survey.pk %}">Далее: проверить и опубликовать</a></p>
+<p><a href="{% url 'surveys_builder:survey_delete' survey.pk %}">Удалить черновик опросника</a></p>
+{% else %}<p>Опросник опубликован. Вопросы доступны только для чтения.</p>{% endif %}
+{% endblock %}

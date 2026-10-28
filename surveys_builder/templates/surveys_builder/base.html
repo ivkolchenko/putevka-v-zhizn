@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{% block title %}Опросники{% endblock %}</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f7f9fc;
+            color: #212529;
+            max-width: 1000px;
+            margin: 30px auto;
+            padding: 0 20px;
+        }
+
+        h1 {
+            font-size: 32px;
+        }
+
+        h2 {
+            margin-top: 30px;
+        }
+
+        form,
+        article {
+            background-color: white;
+            border: 1px solid #ddd;
+            padding: 20px;
+            margin: 20px 0;
+        }
+
+        input,
+        textarea,
+        select {
+            width: 100%;
+            padding: 8px;
+            margin: 5px 0 15px;
+            box-sizing: border-box;
+        }
+
+        input[type="checkbox"], input[type="radio"] {
+            width: auto;
+            padding: 0;
+            margin: 0 0 0 5px;
+            vertical-align: middle;
+        }
+
+        textarea {
+            min-height: 100px;
+        }
+
+        button {
+            background-color: #0d6efd;
+            color: white;
+            border: none;
+            padding: 8px 15px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background-color: #0b5ed7;
+        }
+
+        a {
+            color: #0d6efd;
+            text-decoration: none;
+        }
+
+        a:hover {
+            text-decoration: underline;
+        }
+
+        [role="status"] {
+            background-color: #cff4fc;
+            border: 1px solid #b6effb;
+            padding: 10px;
+            color: #055160;
+        }
+
+        blockquote {
+            background-color: white;
+            border-left: 4px solid #ccc;
+            padding: 12px;
+        }
+
+        small {
+            color: #6c757d;
+        }
+
+        hr {
+            border: none;
+            border-top: 1px solid #ddd;
+            margin: 25px 0;
+        }
+
+        .survey-actions {
+            margin-top: 10px;
+        }
+
+        .audience-field {
+            border: 1px solid #ddd;
+            margin: 16px 0;
+            padding: 12px;
+            min-width: 0;
+        }
+
+        .audience-input > div {
+            max-height: 240px;
+            overflow-y: auto;
+        }
+
+        .audience-input label {
+            display: block;
+            padding: 5px 0;
+        }
+    </style>
+</head>
+<body>
+<header>
+    <a href="{% url 'personal_info' %}">Личный кабинет</a> ·
+    <a href="{% url 'student_surveys:list' %}">Мои опросы</a>
+    {% if user.is_staff %} · <a href="{% url 'staff_surveys_list' %}">Все опросы</a> · <a href="{% url 'surveys_builder:constructor' %}">Создать опрос</a>{% endif %}
+</header>
+{% if messages %}<ul role="status">{% for message in messages %}<li>{{ message }}</li>{% endfor %}</ul>{% endif %}
+{% if survey and user.is_staff %}
+<nav aria-label="Этапы конструктора">
+    <a href="{% url 'surveys_builder:survey_edit' survey.pk %}">Название и срок</a> →
+    <a href="{% url 'surveys_builder:audience' survey.pk %}">1. Получатели</a> →
+    <a href="{% url 'surveys_builder:survey_detail' survey.pk %}">2. Вопросы</a> →
+    <a href="{% url 'surveys_builder:preview' survey.pk %}">3. Проверка и публикация</a> ·
+    <a href="{% url 'surveys_builder:results' survey.pk %}">Результаты</a>
+</nav>
+<p>Состояние: {{ survey.get_status_display }}{% if survey.deadline %}. Ответить до {{ survey.deadline }}{% endif %}</p>
+{% endif %}
+<main>{% block content %}{% endblock %}</main>
+</body>
+</html>

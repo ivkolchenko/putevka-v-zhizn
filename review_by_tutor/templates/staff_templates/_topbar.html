@@ -7,6 +7,10 @@
         {% if user.is_authenticated %}
             <div class="collapse navbar-collapse" id="topnav">
                 <ul class="navbar-nav ms-auto align-items-center gap-4">
+                    {% if user.is_staff %}
+                    <li class="nav-item"><a class="nav-link" href="{% url 'staff_users_list' %}">Пользователи</a></li>
+                    <li class="nav-item"><a class="nav-link {% if request.resolver_match.url_name == 'staff_surveys_list' %}active{% endif %}" href="{% url 'staff_surveys_list' %}">Опросы</a></li>
+                    {% endif %}
                     <!-- Уведомления -->
                     <li class="nav-item dropdown me-3 gap-4" hx-ignore="false">
                         <a class="nav-link position-relative dropdown-toggle d-flex align-items-center gap-2"

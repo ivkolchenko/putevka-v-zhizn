@@ -1,10 +1,14 @@
 from django.urls import path
+from django.views.generic import RedirectView
 
 from documents import views as docviews
 from family_income import staff_views as family_income_staff_views
+from surveys_builder import views as survey_views
 from . import views, service_views
 
 urlpatterns = [
+    path("", RedirectView.as_view(pattern_name="staff_users_list", query_string=True), name="staff_index"),
+    path("surveys/", survey_views.survey_list, name="staff_surveys_list"),
     path("letters/<int:user_id>/", views.staff_letter_detail, name="staff_letter_detail"),
     path("letters/<int:user_id>/download/", views.staff_letter_download, name="staff_letter_download"),
     path("profiles/<int:user_id>/", views.staff_profile_detail, name="staff_profile_detail"),
