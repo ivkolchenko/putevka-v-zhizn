@@ -7,6 +7,8 @@
     <div class="container py-4">
         <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
             <h1 class="mb-0 me-auto">Пользователи</h1>
+            <a href="{% url 'staff_surveys_list' %}" class="btn btn-outline-primary">Все опросы</a>
+            <a href="{% url 'surveys_builder:constructor' %}" class="btn btn-outline-primary">Создать опросник</a>
 
             <a href="{% url 'staff_users_export_xlsx' %}?{{ request.GET.urlencode }}"
                class="btn btn-success">
@@ -18,6 +20,7 @@
 
         <!-- Фильтры -->
         <form class="row g-3 mb-3" method="get">
+            <button type="submit" hidden>Применить</button>
             <!-- Поиск -->
             <div class="col-lg-4">
                 <label class="form-label">Поиск</label>
@@ -47,46 +50,53 @@
                     <button class="btn btn-outline-secondary dropdown-toggle w-100 text-start"
                             type="button"
                             data-bs-toggle="dropdown"
+                            data-bs-auto-close="outside"
                             id="gradeDropdownBtn">
                         Классы
                     </button>
 
                     <div class="dropdown-menu p-3" style="max-height:200px;overflow:auto;">
+                        <button type="submit" name="clear_filter" value="grade_group"
+                                class="btn btn-sm btn-outline-secondary mb-2">Снять выбор классов</button>
 
                         <div class="form-check">
                             <input class="form-check-input grade-check"
                                    type="checkbox"
                                    name="grade_group"
+                                   id="grade9"
                                    value="9"
                                    {% if "9" in grades_selected %}checked{% endif %}>
-                            <label class="form-check-label">9 класс</label>
+                            <label class="form-check-label" for="grade9">9 класс</label>
                         </div>
 
                         <div class="form-check">
                             <input class="form-check-input grade-check"
                                    type="checkbox"
                                    name="grade_group"
+                                   id="grade10"
                                    value="10"
                                    {% if "10" in grades_selected %}checked{% endif %}>
-                            <label class="form-check-label">10 класс</label>
+                            <label class="form-check-label" for="grade10">10 класс</label>
                         </div>
 
                         <div class="form-check">
                             <input class="form-check-input grade-check"
                                    type="checkbox"
                                    name="grade_group"
+                                   id="grade11"
                                    value="11"
                                    {% if "11" in grades_selected %}checked{% endif %}>
-                            <label class="form-check-label">11 класс</label>
+                            <label class="form-check-label" for="grade11">11 класс</label>
                         </div>
 
                         <div class="form-check">
                             <input class="form-check-input grade-check"
                                    type="checkbox"
                                    name="grade_group"
+                                   id="gradeOther"
                                    value="other"
                                    {% if "other" in grades_selected %}checked{% endif %}>
-                            <label class="form-check-label">Иное</label>
+                            <label class="form-check-label" for="gradeOther">Иное</label>
                         </div>
 
                     </div>
@@ -100,19 +110,23 @@
                     <button class="btn btn-outline-secondary dropdown-toggle w-100 text-start"
                             type="button"
                             data-bs-toggle="dropdown"
+                            data-bs-auto-close="outside"
                             id="profileDropdownBtn">
                         Профили
                     </button>
 
                     <div class="dropdown-menu p-3" style="max-height:250px;overflow:auto;">
+                        <button type="submit" name="clear_filter" value="profile"
+                                class="btn btn-sm btn-outline-secondary mb-2">Снять выбор профилей</button>
                         {% for value, label in profiles %}
                             <div class="form-check">
                                 <input class="form-check-input profile-check"
                                        type="checkbox"
                                        name="profile"
+                                       id="profile{{ forloop.counter }}"
                                        value="{{ value }}"
                                        {% if value|stringformat:"s" in profiles_selected %}checked{% endif %}>
-                                <label class="form-check-label">
+                                <label class="form-check-label" for="profile{{ forloop.counter }}">
                                     {{ label }}
                                 </label>
                             </div>
@@ -220,7 +234,7 @@
 
             <!-- Доп. фильтры (схлопнули) -->
             <div class="col-12">
-                <details class="mt-1">
+                <details class="mt-1" {% if school or course or curator_need or registration_confirmed != "1" %}open{% endif %}>
                     <summary class="text-muted small">Доп. фильтры (школа, курс, куратор)</summary>
                     <div class="row g-3 mt-1">
                         <div class="col-md-4">
@@ -240,7 +254,7 @@
                                 <option value="">Все курсы</option>
                                 {% for c in courses %}
                                     <option value="{{ c.id }}"
-                                            {% if c.id|stringformat:"s" == course %}selected{% endif %}>{{ c.title }}</option>
+                                            {% if c.id|stringformat:"s" == course %}selected{% endif %}>{{ c.school.name }} — {{ c.title }}</option>
                                 {% endfor %}
                             </select>
                         </div>
@@ -275,7 +289,7 @@
 
             <div class="col-12 d-flex gap-2">
                 <button class="btn btn-primary">Применить</button>
-                <a class="btn btn-outline-secondary" href="{% url 'staff_users_list' %}">Сбросить</a>
+                <a class="btn btn-outline-secondary" href="{% url 'staff_users_list' %}?registration_confirmed=0">Сбросить все фильтры</a>
             </div>
 
 
@@ -883,61 +897,34 @@
                     restoreChecksOnPage();
                 })();
 
-                (function () {
-
-                    const btn = document.getElementById("gradeDropdownBtn");
-                    const checks = document.querySelectorAll(".grade-check");
-
-                    function updateLabel() {
-                        const selected = Array.from(checks)
-                            .filter(c => c.checked)
-                            .map(c => c.nextElementSibling.textContent.trim());
-
-                        if (selected.length === 0) {
-                            btn.textContent = "Классы";
-                        } else {
-                            btn.textContent = selected.join(", ");
-                        }
-                    }
-
-                    checks.forEach(c => {
-                        c.addEventListener("change", updateLabel);
-                    });
-
-                    updateLabel();
-
-                })();
-
-                (function () {
-
-                    const btn = document.getElementById("profileDropdownBtn");
-                    const checks = document.querySelectorAll(".profile-check");
-
-                    function updateLabel() {
-                        const selected = Array.from(checks)
-                            .filter(c => c.checked)
-                            .map(c => c.nextElementSibling.textContent.trim());
-
-                        if (selected.length === 0) {
-                            btn.textContent = "Профили";
-                        } else if (selected.length <= 2) {
-                            btn.textContent = selected.join(", ");
-                        } else {
-                            btn.textContent = "Выбрано: " + selected.length;
-                        }
-                    }
-
-                    checks.forEach(c => {
-                        c.addEventListener("change", updateLabel);
-                    });
-
-                    updateLabel();
-
-                })();
             </script>
 
         {% else %}
             <div class="alert alert-info">Пользователи не найдены.</div>
         {% endif %}
+        <script>
+            // Фильтры доступны и при пустой выборке.
+            (function () {
+                function bindLabel(buttonId, selector, emptyLabel) {
+                    const button = document.getElementById(buttonId);
+                    const checks = Array.from(document.querySelectorAll(selector));
+                    function updateLabel() {
+                        const labels = checks.filter(c => c.checked)
+                            .map(c => c.nextElementSibling.textContent.trim());
+                        button.textContent = labels.length === 0 ? emptyLabel :
+                            labels.length <= 2 ? labels.join(', ') : 'Выбрано: ' + labels.length;
+                    }
+                    checks.forEach(c => c.addEventListener('change', updateLabel));
+                    updateLabel();
+                }
+                bindLabel('gradeDropdownBtn', '.grade-check', 'Классы');
+                bindLabel('profileDropdownBtn', '.profile-check', 'Профили');
+                const school = document.querySelector('select[name="school"]');
+                school.addEventListener('change', function () {
+                    school.form.elements.course.value = '';
+                    school.form.requestSubmit();
+                });
+            })();
+        </script>
     </div>
 {% endblock %}

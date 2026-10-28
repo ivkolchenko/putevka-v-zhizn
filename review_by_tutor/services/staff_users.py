@@ -11,6 +11,7 @@ from django.utils import timezone
 
 from core.models import MotivationLetter
 from family_income.models import FamilyIncomeCase, FamilyIncomeDocument
+from my_study.models import CourseSelection
 from review_by_tutor.models import TestAssignment
 from scholar_form.models import ScholarVideo
 
@@ -18,28 +19,19 @@ User = get_user_model()
 
 
 def build_staff_users_queryset(request):
-    q = (request.GET.get("q") or "").strip()
-
-    show_staff = (request.GET.get("show_staff") or "").strip()
-    registration_confirmed = (request.GET.get("registration_confirmed", "1") or "").strip()
-
-    school = (request.GET.get("school") or "").strip()
-    course = (request.GET.get("course") or "").strip()
-
-    form_status = (request.GET.get("form_status") or "").strip()
-    participant_status = (request.GET.get("participant_status") or "").strip()
-    family_income_status = (request.GET.get("family_income_status") or "").strip()
-
-    profiles_selected = [x.strip() for x in request.GET.getlist("profile") if x.strip()]
-    grades_selected = [x.strip() for x in request.GET.getlist("grade_group") if x.strip()]
-
-    curator_need = (request.GET.get("curator_need") or "").strip()
-    step = (request.GET.get("step") or "").strip()
-    test_deadline = (request.GET.get("test_deadline") or "").strip()
-    letter_status = (request.GET.get("letter_status") or "").strip()
-    favorite_letter = (request.GET.get("favorite_letter") or "").strip()
-
-    sort = (request.GET.get("sort") or "-date_joined").strip()
+    filters = get_staff_users_filters(request)
+    q = filters['q']
+    show_staff = filters['show_staff']
+    registration_confirmed = filters['registration_confirmed']
+    school, course = filters['school'], filters['course']
+    form_status = filters['form_status']
+    participant_status = filters['participant_status']
+    family_income_status = filters['family_income_status']
+    profiles_selected, grades_selected = filters['profiles_selected'], filters['grades_selected']
+    curator_need = filters['curator_need']
+    step, test_deadline = filters['step'], filters['test_deadline']
+    letter_status, favorite_letter = filters['letter_status'], filters['favorite_letter']
+    sort = filters['sort']
     sort_fields = [s.strip() for s in sort.split(",") if s.strip()]
 
     qs = (
@@ -108,26 +100,25 @@ def build_staff_users_queryset(request):
             Q(user_info__isnull=True) | ~Q(user_info__status="FINAL STAGE")
         )
 
-    if q:
+    for word in q.split():
         qs = qs.filter(
-            Q(username__icontains=q) |
-            Q(email__icontains=q) |
-            Q(first_name__icontains=q) |
-            Q(last_name__icontains=q) |
-            Q(user_info__phone__icontains=q) |
-            Q(user_info__region__icontains=q)
+            Q(username__icontains=word) | Q(email__icontains=word) |
+            Q(first_name__icontains=word) | Q(last_name__icontains=word) |
+            Q(user_info__first_name__icontains=word) | Q(user_info__last_name__icontains=word) |
+            Q(user_info__middle_name__icontains=word) | Q(user_info__email__icontains=word) |
+            Q(user_info__phone__icontains=word) | Q(user_info__region__icontains=word)
         )
 
+    # Все условия относятся к одной записи выбора курса, без перекрёстных JOIN.
+    enrollments = CourseSelection.objects.all()
     if school:
-        qs = qs.filter(course_selections__course__school_id=school)
-
+        enrollments = enrollments.filter(course__school_id=school)
     if course:
-        qs = qs.filter(course_selections__course_id=course)
-
-    if curator_need == "1":
-        qs = qs.filter(course_selections__need_tutor=True)
-    elif curator_need == "0":
-        qs = qs.filter(course_selections__need_tutor=False)
+        enrollments = enrollments.filter(course_id=course)
+    if curator_need in ("1", "0"):
+        enrollments = enrollments.filter(need_tutor=curator_need == "1")
+    if school or course or curator_need in ("1", "0"):
+        qs = qs.filter(pk__in=enrollments.values('user_id'))
 
     if step:
         qs = qs.filter(user_info__selection_step=step)
@@ -156,7 +147,7 @@ def build_staff_users_queryset(request):
                 ~Q(user_info__next_year_class_digit__in=[9, 10, 11])
             )
 
-        qs = qs.filter(grade_q)
+        qs = qs.filter(grade_q) if numeric_grades or include_other else qs.none()
 
     letter_status_sq = Subquery(
         MotivationLetter.objects
@@ -405,12 +396,23 @@ def build_staff_users_queryset(request):
     return qs.distinct().order_by(*order_by_fields)
 
 
+def _filter_id(value):
+    value = (value or '').strip()
+    if not value:
+        return ''
+    # Некорректный ID даёт пустую выборку, а не 500 и не расширение аудитории.
+    if not value.isascii() or not value.isdecimal() or len(value) > 19:
+        return '0'
+    number = int(value)
+    return str(number) if 0 < number <= 9223372036854775807 else '0'
+
+
 def get_staff_users_filters(request):
     q = (request.GET.get("q") or "").strip()
     show_staff = (request.GET.get("show_staff") or "").strip()
     registration_confirmed = (request.GET.get("registration_confirmed", "1") or "").strip()
-    school = (request.GET.get("school") or "").strip()
-    course = (request.GET.get("course") or "").strip()
+    school = _filter_id(request.GET.get("school"))
+    course = _filter_id(request.GET.get("course"))
     form_status = (request.GET.get("form_status") or "").strip()
     participant_status = (request.GET.get("participant_status") or "").strip()
     family_income_status = (request.GET.get("family_income_status") or "").strip()

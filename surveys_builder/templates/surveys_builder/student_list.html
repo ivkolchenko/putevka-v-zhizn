@@ -1,0 +1,10 @@
+{% extends 'surveys_builder/base.html' %}
+{% block content %}
+<h1>Мои опросы</h1>
+<ul>{% for item in page_obj %}<li>
+<a href="{% url 'student_surveys:answer' item.pk %}">{{ item.survey.title }}</a> —
+{% if item.response.status == 'submitted' %}Ответ отправлен{% elif item.survey.accepts_answers %}{% if item.response %}Есть черновик{% else %}Ожидает ответа{% endif %}{% else %}Приём ответов завершён{% endif %}
+{% if item.survey.deadline %} · до {{ item.survey.deadline }}{% endif %}
+</li>{% empty %}<li>Вам пока не назначены опросы.</li>{% endfor %}</ul>
+{% include 'surveys_builder/_pagination.html' %}
+{% endblock %}

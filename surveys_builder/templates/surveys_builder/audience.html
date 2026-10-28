@@ -1,0 +1,34 @@
+{% extends 'surveys_builder/base.html' %}
+{% block content %}
+<h1>1. Получатели: {{ survey.title }}</h1>
+<p>Между группами фильтров действует «И», внутри каждой группы — «ИЛИ». Пустой фильтр не ограничивает выборку.
+Школа, предмет и курс проверяются для одного выбранного курса ученика.</p>
+<p>В режиме «Конкретные ученики» фильтры не применяются. В режиме фильтров выбранные вручную ученики добавляются к выборке независимо от фильтров. Исключения действуют в обоих режимах.</p>
+{% if survey.is_draft %}
+<form method="post">{% csrf_token %}{% include 'surveys_builder/_revision.html' %}
+<button type="submit" name="action" value="preview" hidden>Проверить получателей</button>
+{{ form.non_field_errors }}
+{% for field in form %}
+<fieldset class="audience-field">
+    <legend>{{ field.label }}</legend>
+    {{ field.errors }}
+    <div class="audience-input">{{ field }}</div>
+    {% if field.help_text %}<p><small>{{ field.help_text }}</small></p>{% endif %}
+    {% if field.name != 'mode' %}
+    <button type="submit" name="clear_field" value="{{ field.name }}" formnovalidate>Снять выбор: {{ field.label }}</button>
+    {% endif %}
+</fieldset>
+{% endfor %}
+<p>Значения можно снять отдельными флажками. Сброс и снятие выбора показывают новую выборку;
+для сохранения изменений нажмите «Сохранить и перейти к вопросам».</p>
+<button type="submit" name="action" value="reset" formnovalidate>Сбросить все фильтры и списки</button>
+<button type="submit" name="action" value="preview">Проверить получателей</button>
+<button type="submit" name="action" value="save">Сохранить и перейти к вопросам</button>
+</form>
+{% else %}<p>Получатели уже зафиксированы при публикации. Их список находится в результатах.</p>{% endif %}
+{% if recipient_count != None %}
+<h2>Найдено получателей: {{ recipient_count }}</h2>
+<p>Здесь показаны первые 50. Полный список можно проверить перед публикацией.</p>
+<ul>{% for id, name, username in recipients %}<li>{{ name }} ({{ username }})</li>{% empty %}<li>Никто не подходит под условия.</li>{% endfor %}</ul>
+{% endif %}
+{% endblock %}

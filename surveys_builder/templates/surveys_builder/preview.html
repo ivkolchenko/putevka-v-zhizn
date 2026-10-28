@@ -1,0 +1,18 @@
+{% extends 'surveys_builder/base.html' %}
+{% block content %}
+<h1>3. Проверка и публикация: {{ survey.title }}</h1>
+{{ survey.description|linebreaks }}
+<h2>Предпросмотр вопросов</h2>
+<form method="post">{% csrf_token %}{% include 'surveys_builder/_response_form.html' %}<button type="submit">Проверить заполнение (без сохранения)</button></form>
+{% if errors %}<h2>До публикации нужно исправить</h2><ul>{% for error in errors %}<li>{{ error }}</li>{% endfor %}</ul>{% endif %}
+{% if page_obj %}
+<h2>Получатели: {{ page_obj.paginator.count }}</h2>
+<ul>{% for name, username in recipients %}<li>{{ name }} ({{ username }})</li>{% endfor %}</ul>
+{% include 'surveys_builder/_pagination.html' %}
+{% endif %}
+{% if publish_token %}
+<p>После публикации список получателей и вопросы будут зафиксированы. Опрос появится в личных кабинетах этих учеников. Ответы именные; сотрудникам доступны отправленные ответы.</p>
+<form method="post" action="{% url 'surveys_builder:publish' survey.pk %}">{% csrf_token %}
+<input type="hidden" name="token" value="{{ publish_token }}"><button type="submit">Опубликовать опросник</button></form>
+{% endif %}
+{% endblock %}

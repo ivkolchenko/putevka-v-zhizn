@@ -1052,6 +1052,17 @@ def staff_note_toggle_favorite(request, user_id: int, note_id: int):
 @login_required
 @user_passes_test(_staff_check)
 def staff_users_list(request):
+    clear_filter = request.GET.get('clear_filter')
+    if clear_filter in ('q', 'profile', 'grade_group', 'show_staff', 'school', 'course',
+                        'form_status', 'participant_status', 'family_income_status', 'curator_need',
+                        'step', 'test_deadline', 'letter_status', 'favorite_letter', 'registration_confirmed'):
+        query = request.GET.copy()
+        query.pop(clear_filter, None)
+        query.pop('clear_filter', None)
+        query.pop('page', None)
+        if clear_filter == 'registration_confirmed':
+            query['registration_confirmed'] = '0'
+        return redirect(reverse('staff_users_list') + '?' + query.urlencode())
     qs = build_staff_users_queryset(request)
 
     paginator = Paginator(qs, 30)
@@ -1060,9 +1071,9 @@ def staff_users_list(request):
     filters_data = get_staff_users_filters(request)
 
     schools = School.objects.all().order_by("name")
-    courses_qs = Course.objects.all()
+    courses_qs = Course.objects.select_related('school')
     if filters_data["school"]:
-        courses_qs = courses_qs.filter(school_id=filters_data["school"])
+        courses_qs = courses_qs.filter(Q(school_id=filters_data["school"]) | Q(pk=filters_data["course"] or 0))
     courses = courses_qs.order_by("title")
 
     profiles = list(UserInfo.InternalStudyProfile.choices or [])

@@ -1,0 +1,18 @@
+{% extends 'surveys_builder/base.html' %}
+{% block content %}
+<h1>{{ survey.title }}</h1>{{ survey.description|linebreaks }}
+<p>Ответы именные. После отправки сотрудники фонда смогут их прочитать. Черновик виден только вам.</p>
+{% if survey.deadline %}<p>Приём ответов до {{ survey.deadline }}.</p>{% endif %}
+{% if errors %}<ul role="alert">{% for error in errors %}<li>{{ error }}</li>{% endfor %}</ul>{% endif %}
+{% if read_only %}
+<p>{% if submitted %}Ваш ответ отправлен. Спасибо!{% else %}Приём ответов завершён.{% endif %}</p>
+{% include 'surveys_builder/_response_sections.html' %}
+{% else %}
+<form method="post">{% csrf_token %}<input type="hidden" name="response_revision" value="{{ response_revision }}">
+{% include 'surveys_builder/_response_form.html' %}
+<button type="submit" name="action" value="save" formnovalidate>Сохранить черновик</button>
+<button type="submit" name="action" value="submit">Отправить ответ</button>
+</form>
+{% endif %}
+<p><a href="{% url 'student_surveys:list' %}">Все мои опросы</a></p>
+{% endblock %}

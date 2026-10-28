@@ -1,0 +1,7 @@
+{% extends 'surveys_builder/base.html' %}
+{% block content %}
+<h1>{{ survey.title }}</h1>
+<p>{{ response.assignment.recipient_snapshot.name }} · {{ response.submitted_at }}</p>
+{% include 'surveys_builder/_response_sections.html' %}
+<a href="{% url 'surveys_builder:results' survey.pk %}">Вернуться к результатам</a>
+{% endblock %}
