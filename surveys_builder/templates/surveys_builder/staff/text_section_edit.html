@@ -1,1 +1,39 @@
-{% extends 'surveys_builder/staff/base.html' %}{% block builder_content %}<div class="page-heading"><p class="step-label">Шаг 2 из 4 · {{ edited_block.title }}</p><h1>Текст или картинка</h1><p>Можно добавить только текст, только картинку или оба элемента.</p></div>{% if text_section and text_section.image %}<img class="survey-image" src="{% url 'surveys_builder:section_image' text_section.pk %}" alt="{{ text_section.image_alt }}">{% endif %}{% if survey.is_draft %}<form method="post" enctype="multipart/form-data" class="editor-form" data-confirm-leave>{% csrf_token %}{% include 'surveys_builder/partials/_revision.html' %}{{ form.as_p }}<div class="form-footer"><a href="{% url 'surveys_builder:block_content' survey.pk edited_block.pk %}">Отмена — к блоку</a><button>Сохранить и вернуться к блоку</button></div></form>{% else %}<p>Опубликованный блок нельзя менять.</p>{% endif %}{% endblock %}
+{% extends 'surveys_builder/staff/base.html' %}
+{% block builder_content %}
+<div class="page-heading">
+    <p class="step-label">Шаг 2 из 4 · {{ edited_block.title }}</p>
+    <h1>Текст или картинка</h1>
+    <p>Можно добавить только текст, только картинку или оба элемента.</p>
+</div>
+{% if survey.is_draft %}
+<form method="post" enctype="multipart/form-data" class="editor-form" data-confirm-leave data-section-image-editor>
+    {% csrf_token %}
+    {% include 'surveys_builder/partials/_revision.html' %}
+    {{ form.non_field_errors }}
+    {% for field in form.visible_fields %}
+    <p>{{ field.errors }}{{ field.label_tag }} {{ field }}{% if field.help_text %}<span class="helptext">{{ field.help_text }}</span>{% endif %}</p>
+    {% if field.name == 'image' %}
+    <div class="mb-4" data-current-image>
+        <div class="mb-3" data-image-preview {% if not text_section.image %}hidden{% endif %}>
+            <img class="survey-image" {% if text_section.image %}src="{% url 'surveys_builder:section_image' text_section.pk %}"{% endif %} alt="{{ text_section.image_alt|default:'Выбранное фото' }}" data-image-preview-content>
+        </div>
+        <div class="d-flex flex-wrap align-items-center gap-3">
+            <button type="button" class="btn btn-outline-danger btn-sm" data-remove-image hidden>Удалить фото</button>
+            <p class="text-muted small mb-0" role="status" data-image-removal-status hidden>Фото будет удалено после сохранения. Можно выбрать другое.</p>
+            <button type="button" class="btn btn-outline-secondary btn-sm" data-undo-image-removal hidden>Отменить удаление</button>
+        </div>
+    </div>
+    {% endif %}
+    {% endfor %}
+    {% for field in form.hidden_fields %}{{ field.errors }}{{ field }}{% endfor %}
+    <div class="form-footer">
+        <a href="{% url 'surveys_builder:block_content' survey.pk edited_block.pk %}">Отмена — к блоку</a>
+        <button>Сохранить и вернуться к блоку</button>
+        {% if text_section and text_section.image %}<noscript><button type="submit" name="image_action" value="remove" class="btn btn-outline-danger">Удалить фото и сохранить</button></noscript>{% endif %}
+    </div>
+</form>
+{% else %}
+    {% if text_section and text_section.image %}<img class="survey-image" src="{% url 'surveys_builder:section_image' text_section.pk %}" alt="{{ text_section.image_alt }}">{% endif %}
+    <p>Опубликованный блок нельзя менять.</p>
+{% endif %}
+{% endblock %}

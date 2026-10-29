@@ -171,7 +171,7 @@ class AudienceForm(BlockVisibilityForm):
 
 
 class BlockTextSectionForm(forms.ModelForm):
-    remove_image = forms.BooleanField(label='Убрать текущую картинку', required=False)
+    remove_image = forms.BooleanField(required=False, widget=forms.HiddenInput)
 
     class Meta:
         model = BlockTextSection

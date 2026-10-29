@@ -75,6 +75,50 @@ document.querySelectorAll('[data-question-editor]').forEach(form => {
     kind.addEventListener('change', syncKind); syncKind();
     form.addEventListener('submit', () => { textarea.value = Array.from(rows.querySelectorAll('input')).map(input => input.value).join('\n'); });
 });
+document.querySelectorAll('[data-section-image-editor]').forEach(form => {
+    const remove = form.querySelector('[data-remove-image]');
+    if (!remove) return;
+    const undo = form.querySelector('[data-undo-image-removal]');
+    const preview = form.querySelector('[data-image-preview]');
+    const image = form.querySelector('[data-image-preview-content]');
+    const savedImage = image.getAttribute('src') || '';
+    const status = form.querySelector('[data-image-removal-status]');
+    const value = form.querySelector('[name="remove_image"]');
+    const upload = form.querySelector('[name="image"]');
+    let pending = ['true', '1', 'on'].includes(value.value.toLowerCase());
+    let selectedImage = null;
+    function sync() {
+        if (selectedImage) URL.revokeObjectURL(selectedImage);
+        selectedImage = upload.files.length ? URL.createObjectURL(upload.files[0]) : null;
+        const source = selectedImage || (!pending ? savedImage : '');
+        if (source) image.src = source;
+        else image.removeAttribute('src');
+        value.value = pending ? 'true' : '';
+        preview.hidden = !source;
+        remove.hidden = !source;
+        undo.hidden = !pending || !savedImage;
+        status.hidden = !pending;
+    }
+    remove.addEventListener('click', event => {
+        event.preventDefault();
+        upload.value = '';
+        pending = Boolean(savedImage);
+        sync();
+        value.dispatchEvent(new Event('change', {bubbles: true}));
+        upload.focus();
+    });
+    undo.addEventListener('click', () => {
+        pending = false;
+        sync();
+        value.dispatchEvent(new Event('change', {bubbles: true}));
+        remove.focus();
+    });
+    upload.addEventListener('change', () => {
+        if (upload.files.length) pending = false;
+        sync();
+    });
+    sync();
+});
 // Не теряем набранный вопрос при переходе к следующему блоку.
 const unsavedForms = new Set();
 document.querySelectorAll('form[data-confirm-leave]').forEach(form => {

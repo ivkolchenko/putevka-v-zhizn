@@ -436,8 +436,18 @@ def text_section_edit(request, pk, block_pk, section_pk=None):
     section = get_object_or_404(block.text_sections, pk=section_pk) if section_pk else None
     form = BlockTextSectionForm(instance=section)
     if request.method == 'POST':
+        data, files = request.POST, request.FILES
+        if request.POST.get('image_action') == 'remove':
+            # Без JavaScript кнопка удаляет фото при сохранении остальных полей.
+            data, files = request.POST.copy(), request.FILES.copy()
+            data['remove_image'] = True
+            files.pop('image', None)
+        elif request.FILES.get('image') and request.POST.get('remove_image'):
+            # Новое фото заменяет старое даже после ранее выбранного удаления.
+            data = request.POST.copy()
+            data['remove_image'] = False
         try:
-            services.save_text_section(pk, block_pk, request.user, request.POST, request.FILES,
+            services.save_text_section(pk, block_pk, request.user, data, files,
                                       request.POST.get('revision'), section_pk)
             messages.success(request, 'Текстовая секция сохранена.')
             return redirect('surveys_builder:block_content', pk=pk, block_pk=block_pk)
