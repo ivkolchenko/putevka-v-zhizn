@@ -494,7 +494,8 @@ class SurveyTests(TestCase):
         sidebar = render_to_string('core/_sidebar.html', {'user': self.student})
         self.assertEqual(sidebar.count(reverse('student_surveys:list')), 2)
         response = self.client.get(reverse('staff_users_list'))
-        self.assertContains(response, reverse('surveys_builder:constructor'))
+        self.assertContains(response, reverse('staff_surveys_list'))
+        self.assertNotContains(response, 'Создать опросник')
 
     def test_publication_is_atomic_if_assignment_write_fails(self):
         survey = self.make_survey()

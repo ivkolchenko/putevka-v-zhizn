@@ -57,19 +57,65 @@ class GuidedSurveyFlowTests(TestCase):
         self.assertEqual(first.questions.get().title, 'Ваше имя')
 
     def test_imported_block_has_next_actions_in_target_survey(self):
-        template = services.create_block_template(self.staff, {'title': 'Готовый блок'})
+        template = services.create_block_template(self.staff, {'title': 'Готовый блок',
+            'description': 'Описание шаблона', 'grades': ['11']})
         block = template.blocks.get()
+        services.save_question(template.pk, self.staff,
+            {'block': block.pk, 'title': 'Скопированный вопрос', 'answer_type': 'short_text'}, template.revision)
+        template.refresh_from_db()
         services.save_text_section(template.pk, block.pk, self.staff, {'text': 'Инструкция'}, {}, template.revision)
         survey = services.create_survey(self.staff, {'title': 'Целевой опрос'})
-        response = self.client.post(reverse('surveys_builder:import_block_template', args=[survey.pk]),
+        create_url = reverse('surveys_builder:block_create', args=[survey.pk])
+        import_url = reverse('surveys_builder:import_block_template', args=[survey.pk])
+        self.assertContains(self.client.get(create_url), 'Загрузить шаблон')
+        self.assertNotContains(self.client.get(reverse('surveys_builder:survey_detail', args=[survey.pk])), import_url)
+        self.assertContains(self.client.get(import_url), '← К созданию блока')
+        response = self.client.post(import_url,
             {'template_id': template.pk, 'revision': survey.revision})
         copied = survey.blocks.get()
-        self.assertRedirects(response, reverse('surveys_builder:block_content', args=[survey.pk, copied.pk]))
-        page = self.client.get(response.url)
+        source_question = block.questions.get()
+        copied_question = copied.questions.get()
+        self.assertNotEqual(copied_question.pk, source_question.pk)
+        edit_url = reverse('surveys_builder:block_edit', args=[survey.pk, copied.pk])
+        self.assertRedirects(response, edit_url)
+        self.assertContains(self.client.get(edit_url), 'Описание шаблона')
+        self.assertNotContains(self.client.get(edit_url), 'Загрузить шаблон')
+        survey.refresh_from_db()
+        response = self.client.post(edit_url, {'revision': survey.revision, 'title': 'Настроенная копия',
+            'description': 'Новое описание', 'grades': ['10']})
+        content_url = reverse('surveys_builder:block_content', args=[survey.pk, copied.pk])
+        self.assertRedirects(response, content_url)
+        copied.refresh_from_db()
+        block.refresh_from_db()
+        self.assertEqual((copied.title, copied.description, copied.visibility_filters['grades']),
+                         ('Настроенная копия', 'Новое описание', ['10']))
+        self.assertEqual((block.title, block.visibility_filters['grades']), ('Готовый блок', ['11']))
+        page = self.client.get(content_url)
+        self.assertContains(page, 'Скопированный вопрос')
+        self.assertContains(page, 'Инструкция')
+        self.assertContains(page, reverse('surveys_builder:question_edit', args=[survey.pk, copied_question.pk]))
+        self.assertContains(page, reverse('surveys_builder:question_delete', args=[survey.pk, copied_question.pk]))
+        self.assertContains(page, 'Добавить вопрос в этот блок')
         self.assertContains(page, reverse('surveys_builder:block_create', args=[survey.pk]))
         self.assertContains(page, reverse('surveys_builder:audience', args=[survey.pk]))
         self.assertContains(page, 'Добавить следующий блок')
         self.assertTrue(page.context['structure_ready'])
+        survey.refresh_from_db()
+        response = self.client.post(reverse('surveys_builder:question_edit', args=[survey.pk, copied_question.pk]),
+            {'revision': survey.revision, 'title': 'Изменённый вопрос', 'answer_type': 'short_text', 'block': copied.pk})
+        self.assertRedirects(response, content_url)
+        copied_question.refresh_from_db()
+        self.assertEqual(copied_question.title, 'Изменённый вопрос')
+        survey.refresh_from_db()
+        response = self.client.post(content_url,
+            {'revision': survey.revision, 'title': 'Новый вопрос', 'answer_type': 'number'})
+        self.assertRedirects(response, content_url)
+        self.assertEqual(copied.questions.count(), 2)
+        survey.refresh_from_db()
+        response = self.client.post(reverse('surveys_builder:question_delete', args=[survey.pk, copied_question.pk]),
+            {'revision': survey.revision})
+        self.assertRedirects(response, content_url)
+        self.assertEqual(list(copied.questions.values_list('title', flat=True)), ['Новый вопрос'])
 
     def test_question_actions_and_move_return_to_correct_block(self):
         survey = services.create_survey(self.staff, {'title': 'Без лишних переходов'})
@@ -98,23 +144,18 @@ class GuidedSurveyFlowTests(TestCase):
         self.assertContains(page, 'Готово: вернуться в библиотеку')
         self.assertNotContains(page, 'Добавить следующий блок')
 
-    def test_create_block_and_template_keeps_user_in_survey_and_preserves_filters(self):
+    def test_template_load_action_is_only_on_new_block_page(self):
         survey = services.create_survey(self.staff, {'title': 'Опрос с шаблоном'})
         url = reverse('surveys_builder:block_create', args=[survey.pk])
-        self.assertContains(self.client.get(url), 'Создать и добавить в шаблоны')
+        self.assertContains(self.client.get(url), 'Загрузить шаблон')
+        self.assertNotContains(self.client.get(url), 'Создать и добавить в шаблоны')
         response = self.client.post(url, {'revision': survey.revision, 'title': 'Повторяемый блок',
-            'description': 'Инструкция', 'grades': ['11'], 'action': 'save_template'})
+            'description': 'Инструкция', 'grades': ['11']})
         block = survey.blocks.get()
         self.assertRedirects(response, reverse('surveys_builder:block_content', args=[survey.pk, block.pk]))
-        template = SurveysBuilder.objects.get(is_block_template=True)
-        copied = template.blocks.get()
-        self.assertNotEqual(copied.pk, block.pk)
-        self.assertEqual(copied.title, block.title)
-        self.assertEqual(copied.description, block.description)
-        self.assertEqual(copied.visibility_filters, block.visibility_filters)
-        self.assertEqual(copied.visibility_filters['grades'], ['11'])
-        page = self.client.get(reverse('surveys_builder:block_content', args=[template.pk, copied.pk]))
-        self.assertNotContains(page, 'Добавить блок в шаблоны')
+        self.assertFalse(SurveysBuilder.objects.filter(is_block_template=True).exists())
+        self.assertNotContains(self.client.get(reverse('surveys_builder:block_edit', args=[survey.pk, block.pk])),
+                               'Загрузить шаблон')
 
     def test_save_content_to_template_stays_in_source_and_copies_questions_and_text(self):
         survey = services.create_survey(self.staff, {'title': 'Сохранить готовый блок'})

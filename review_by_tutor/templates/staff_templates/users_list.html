@@ -7,9 +7,6 @@
     <div class="container py-4">
         <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
             <h1 class="mb-0 me-auto">Пользователи</h1>
-            <a href="{% url 'staff_surveys_list' %}" class="btn btn-outline-primary">Все опросы</a>
-            <a href="{% url 'surveys_builder:constructor' %}" class="btn btn-outline-primary">Создать опросник</a>
-
             <a href="{% url 'staff_users_export_xlsx' %}?{{ request.GET.urlencode }}"
                class="btn btn-success">
                 Выгрузить Excel

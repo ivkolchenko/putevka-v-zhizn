@@ -127,7 +127,8 @@ class QuestionOptions(models.Model):
 class SurveyAssignment(models.Model):
     """Получатели фиксируются при публикации и больше не зависят от фильтров."""
     survey = models.ForeignKey(SurveysBuilder, on_delete=models.PROTECT, related_name='assignments')
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='survey_assignments')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+                             related_name='survey_assignments')
     assigned_at = models.DateTimeField(auto_now_add=True)
     recipient_snapshot = models.JSONField(default=dict)
     visible_block_ids = models.JSONField(default=list)
@@ -135,6 +136,12 @@ class SurveyAssignment(models.Model):
     class Meta:
         ordering = ['pk']
         constraints = [models.UniqueConstraint(fields=['survey', 'user'], name='unique_survey_recipient')]
+
+    @property
+    def recipient_display(self):
+        if self.user_id is None:
+            return {'name': 'Удалённый участник', 'username': ''}
+        return self.recipient_snapshot
 
 
 class SurveyResponse(models.Model):

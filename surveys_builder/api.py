@@ -233,7 +233,7 @@ def audience(request, pk):
         recipients_page = pagination(request, users, recipient_data)
     else:
         recipients_page = pagination(request, survey.assignments.all(),
-            lambda a: {'id': a.user_id, **a.recipient_snapshot})
+            lambda a: {'id': a.user_id, **a.recipient_display})
     return JsonResponse({'revision': survey.revision, 'configured': survey.audience_configured,
                          'selection': AudienceForm.saved_data(survey), 'recipients': recipients_page})
 
@@ -382,7 +382,7 @@ def results(request, pk):
         response = getattr(assignment, 'response', None)
         submitted = response and response.status == SurveyResponse.Status.SUBMITTED
         return {'id': assignment.pk, 'user_id': assignment.user_id,
-                'recipient': assignment.recipient_snapshot,
+                'recipient': assignment.recipient_display,
                 'response_status': response.status if response else 'not_started',
                 'response_id': response.pk if submitted else None,
                 'submitted_at': response.submitted_at if submitted else None}

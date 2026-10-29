@@ -11,11 +11,13 @@ document.querySelectorAll('[data-filter-picker]').forEach(picker => {
         });
         Array.from(chooser.options).forEach(option => { option.disabled = active.has(option.value); });
     }
-    picker.querySelector('[data-add-filter]').addEventListener('click', () => {
-        if (!chooser.value) return;
-        active.add(chooser.value);
+    chooser.addEventListener('change', () => {
+        const selected = chooser.value;
+        if (!selected) return;
+        active.add(selected);
         chooser.value = '';
         sync();
+        panels.find(panel => panel.dataset.filterPanel === selected)?.querySelector('input[type="checkbox"]')?.focus();
     });
     panels.forEach(panel => panel.querySelector('[data-remove-filter]').addEventListener('click', () => {
         active.delete(panel.dataset.filterPanel);

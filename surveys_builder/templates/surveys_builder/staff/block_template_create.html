@@ -1,0 +1,15 @@
+{% extends 'surveys_builder/staff/base.html' %}
+{% block builder_content %}
+<div class="page-heading">
+    <h1>Новый черновик блока</h1>
+    <p>Укажите название и описание. После создания откроется редактор вопросов и текстовых секций.</p>
+</div>
+<form method="post" class="editor-form" data-confirm-leave>
+    {% csrf_token %}
+    {{ form.as_p }}
+    <div class="form-footer">
+        <a href="{% url 'surveys_builder:block_templates' %}">← К черновикам блоков</a>
+        <button type="submit">Создать и открыть редактор</button>
+    </div>
+</form>
+{% endblock %}

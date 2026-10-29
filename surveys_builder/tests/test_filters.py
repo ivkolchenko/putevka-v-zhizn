@@ -41,6 +41,16 @@ class AudienceFilterTests(TestCase):
         self.assertEqual(form['grades'].value(), ['11'])
         self.assertNotIn('account_active', form.fields)
 
+    def test_reference_choices_are_visible_on_audience_and_block_pages(self):
+        for url in (self.url, reverse('surveys_builder:block_create', args=[self.survey.pk])):
+            response = self.client.get(url)
+            self.assertContains(response, 'Школа')
+            self.assertContains(response, 'Курс')
+            self.assertContains(response, 'name="schools"', count=1)
+            self.assertContains(response, 'name="courses"', count=1)
+            self.assertContains(response, 'for="id_schools_0"')
+            self.assertNotContains(response, 'В справочнике пока нет вариантов для этого фильтра.')
+
     def test_removing_filter_restores_eligible_recipients_and_can_be_saved(self):
         response = self.client.post(self.url, {'revision': self.survey.revision, 'mode': 'filters',
             'profiles': ['it'], 'courses': [self.course.pk], 'action': 'save'})
@@ -66,3 +76,19 @@ class AudienceFilterTests(TestCase):
     def test_invalid_clear_and_stale_version_do_not_change_settings(self):
         self.assertEqual(self.client.post(self.url, {'revision': self.survey.revision, 'clear_field': 'mode'}).status_code, 400)
         self.assertEqual(self.client.post(self.url, {'revision': 0, 'mode': 'filters', 'action': 'save'}).status_code, 400)
+
+
+class EmptyFilterChoicesTests(TestCase):
+    def test_empty_reference_lists_are_explained_on_audience_and_block_pages(self):
+        user_model = get_user_model()
+        staff = user_model.objects.create_user(username='empty-filter-staff', is_staff=True)
+        survey = services.create_survey(staff, {'title': 'Пустые справочники'})
+        self.client.force_login(staff)
+        for url in (
+            reverse('surveys_builder:audience', args=[survey.pk]),
+            reverse('surveys_builder:block_create', args=[survey.pk]),
+        ):
+            response = self.client.get(url)
+            self.assertContains(response, 'В справочнике пока нет вариантов для этого фильтра.', count=4)
+            self.assertContains(response, 'value="10"')
+            self.assertContains(response, 'value="11"')

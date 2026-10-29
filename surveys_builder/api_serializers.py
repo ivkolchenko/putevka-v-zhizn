@@ -76,7 +76,7 @@ def response_data(response):
 
 def submitted_response_data(response):
     data = response_data(response)
-    data['recipient'] = response.assignment.recipient_snapshot
+    data['recipient'] = response.assignment.recipient_display
     data['assignment_id'] = response.assignment_id
     data['display_answers'] = {
         str(a.question_id): services.answer_display(a.question, a.value)

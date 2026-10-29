@@ -5,6 +5,7 @@ app_name = 'surveys_builder'
 urlpatterns = [
     path('api/', include('surveys_builder.api_urls')),
     path('block-templates/', views.block_templates, name='block_templates'),
+    path('block-templates/create/', views.block_template_create, name='block_template_create'),
     path('section-images/<int:section_pk>/', views.section_image, name='section_image'),
     path('', views.constructor, name='constructor'),
     path('<int:pk>/', views.survey_detail, name='survey_detail'),

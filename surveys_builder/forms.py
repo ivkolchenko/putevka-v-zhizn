@@ -114,8 +114,16 @@ class FilterForm(forms.Form):
         active = self.data.getlist('active_filters') if hasattr(self.data, 'getlist') else self.data.get('active_filters', [])
         if not self.is_bound:
             active = self.initial.get('active_filters', self.initial.get('_active_filters', []))
-        return [{'name': name, 'field': self[name], 'active': bool(self[name].value()) or name in active or name in self.initial.get('_active_filters', [])}
-                for name in self.FILTER_FIELDS]
+        groups = []
+        for name in self.FILTER_FIELDS:
+            field = self.fields[name]
+            groups.append({
+                'name': name,
+                'field': self[name],
+                'active': bool(self[name].value()) or name in active or name in self.initial.get('_active_filters', []),
+                'empty': isinstance(field, forms.ModelMultipleChoiceField) and not field.queryset.exists(),
+            })
+        return groups
 
 
 class BlockVisibilityForm(FilterForm):

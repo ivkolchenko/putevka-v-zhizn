@@ -1,1 +1,25 @@
-{% extends 'surveys_builder/staff/base.html' %}{% block builder_content %}<h1>Библиотека черновиков блоков</h1><p>Черновик можно наполнить вопросами, текстом и картинками, а затем вставлять в любые опросы.</p><h2>Создать черновик блока</h2><form method="post">{% csrf_token %}{{ form.as_p }}<button>Создать и открыть редактор</button></form>{% for item in templates %}<article><h2>{{ item.title }}</h2>{{ item.description|linebreaks }}{% for block in item.blocks.all %}<a href="{% url 'surveys_builder:block_content' item.pk block.pk %}">Открыть редактор блока</a>{% endfor %} · <a href="{% url 'surveys_builder:preview' item.pk %}">Предпросмотр</a> · <a href="{% url 'surveys_builder:survey_delete' item.pk %}">Удалить черновик</a></article>{% empty %}<p>Черновиков блоков пока нет.</p>{% endfor %}{% endblock %}
+{% extends 'surveys_builder/staff/base.html' %}
+{% block builder_content %}
+<div class="page-heading">
+    <h1>Черновики блоков</h1>
+    <p>Готовые блоки можно скопировать в любой опрос. Изменения черновика не затрагивают уже добавленные копии.</p>
+</div>
+{% for item in templates %}
+<article class="block-card">
+    <div class="card-heading">
+        <div>
+            <h2>{{ item.blocks.first.title }}</h2>
+            {% if item.blocks.first.description %}{{ item.blocks.first.description|linebreaks }}{% endif %}
+        </div>
+        <div class="d-flex flex-wrap gap-2">
+            <a class="button secondary" href="{% url 'surveys_builder:block_content' item.pk item.blocks.first.pk %}">Открыть черновик</a>
+            <a class="button secondary" href="{% url 'surveys_builder:preview' item.pk %}">Предпросмотр</a>
+            <a class="btn btn-outline-danger" href="{% url 'surveys_builder:survey_delete' item.pk %}">Удалить</a>
+        </div>
+    </div>
+</article>
+{% empty %}
+<div class="empty-state"><p>Черновиков блоков пока нет.</p></div>
+{% endfor %}
+<a class="button" href="{% url 'surveys_builder:block_template_create' %}">Создать новый черновик</a>
+{% endblock %}

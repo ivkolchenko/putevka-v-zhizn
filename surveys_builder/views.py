@@ -10,7 +10,6 @@ from django.contrib.admin.views.decorators import staff_member_required
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import ValidationError
 from django.core.paginator import Paginator
-from django.db import transaction
 from django.db.models import Count, Q
 from django.http import FileResponse, Http404, StreamingHttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
@@ -28,8 +27,10 @@ def page(request, template, survey=None, **context):
              'block_create': 2, 'block_content': 2, 'import_block_template': 2,
              'question_edit': 2, 'question_delete': 2, 'text_section_edit': 2,
              'text_section_create': 2, 'audience': 3, 'preview': 4}
-    return render(request, 'surveys_builder/staff/' + template,
-                  {'survey': survey, 'workflow_step': steps.get(route), **context})
+    response = render(request, 'surveys_builder/staff/' + template,
+                      {'survey': survey, 'workflow_step': steps.get(route), **context})
+    response['Cache-Control'] = 'private, no-store'
+    return response
 
 
 def failure(request, error, survey=None):
@@ -165,16 +166,8 @@ def block_edit(request, pk, block_pk=None):
     visibility = BlockVisibilityForm(initial=block.visibility_filters if block else {})
     if request.method == 'POST':
         try:
-            save_template = request.POST.get('action') == 'save_template' and not survey.is_block_template
-            with transaction.atomic():
-                saved = services.save_block(pk, request.user, request.POST, request.POST.get('revision'), block_pk)
-                if save_template:
-                    services.create_block_template(request.user, {}, source_pk=pk, block_pk=saved.pk,
-                        revision=saved.survey.revision)
-            if save_template:
-                messages.success(request, 'Блок сохранён в опросе. Отдельная копия добавлена в шаблоны.')
-            else:
-                messages.success(request, 'Настройки блока сохранены.' if block else 'Блок создан. Добавьте вопрос или текст.')
+            saved = services.save_block(pk, request.user, request.POST, request.POST.get('revision'), block_pk)
+            messages.success(request, 'Настройки блока сохранены.' if block else 'Блок создан. Добавьте вопрос или текст.')
             return redirect('surveys_builder:block_content', pk=pk, block_pk=saved.pk)
         except services.InvalidForm as error:
             form = error.form
@@ -265,7 +258,7 @@ def survey_delete(request, pk):
     if request.method == 'POST':
         try:
             services.delete_survey(pk, request.user, request.POST.get('revision'), allow_published=True)
-            messages.success(request, 'Опрос и назначения удалены.')
+            messages.success(request, 'Черновик блока удалён.' if survey.is_block_template else 'Опрос и назначения удалены.')
             return redirect('surveys_builder:block_templates' if survey.is_block_template else 'staff_surveys_list')
         except ValidationError as error:
             return failure(request, error, survey)
@@ -389,7 +382,7 @@ def results_csv(request, pk):
         yield writer.writerow([csv_cell(v) for v in ['ID ответа', 'Ученик', 'Логин', 'Отправлен'] + headers])
         for response in responses.iterator(chunk_size=100):
             values = {answer.question_id: answer.value for answer in response.answers.all()}
-            snapshot = response.assignment.recipient_snapshot
+            snapshot = response.assignment.recipient_display
             row = [response.pk, snapshot.get('name', ''), snapshot.get('username', ''), response.submitted_at.isoformat()]
             row.extend(services.answer_display(q, values.get(q.pk)) for q in questions)
             yield writer.writerow([csv_cell(v) for v in row])
@@ -469,8 +462,15 @@ def text_section_action(request, pk, block_pk, section_pk, action):
 
 
 @staff_member_required
-@require_http_methods(['GET', 'POST'])
+@require_http_methods(['GET'])
 def block_templates(request):
+    templates = SurveysBuilder.objects.filter(is_block_template=True).prefetch_related('blocks')
+    return page(request, 'block_templates.html', templates=templates)
+
+
+@staff_member_required
+@require_http_methods(['GET', 'POST'])
+def block_template_create(request):
     form = QuestionBlockForm()
     if request.method == 'POST':
         try:
@@ -478,8 +478,7 @@ def block_templates(request):
             return redirect('surveys_builder:block_content', pk=template.pk, block_pk=template.blocks.get().pk)
         except services.InvalidForm as error:
             form = error.form
-    templates = SurveysBuilder.objects.filter(is_block_template=True).prefetch_related('blocks')
-    return page(request, 'block_templates.html', form=form, templates=templates)
+    return page(request, 'block_template_create.html', form=form)
 
 
 @staff_member_required
@@ -504,8 +503,8 @@ def import_block_template(request, pk):
             except (ValueError, TypeError):
                 raise ValidationError('Выберите черновик блока.')
             block = services.import_block_template(pk, request.user, template_pk, request.POST.get('revision'))
-            messages.success(request, 'Готовый блок добавлен в опрос. При необходимости измените его или продолжите.')
-            return redirect('surveys_builder:block_content', pk=pk, block_pk=block.pk)
+            messages.success(request, 'Шаблон скопирован. Настройте название, описание и видимость блока, затем перейдите к вопросам.')
+            return redirect('surveys_builder:block_edit', pk=pk, block_pk=block.pk)
         except ValidationError as error:
             return failure(request, error, survey)
     return page(request, 'import_block_template.html', survey,

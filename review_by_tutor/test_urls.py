@@ -13,7 +13,9 @@ class StaffEntryPointTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.redirect_chain, [(reverse("staff_users_list") + "?q=%D0%98%D0%B2%D0%B0%D0%BD%D0%BE%D0%B2%D0%B0", 302)])
         self.assertEqual(response.resolver_match.url_name, "staff_users_list")
-        self.assertContains(response, reverse("surveys_builder:constructor"))
+        self.assertNotContains(response, "Все опросы")
+        self.assertNotContains(response, "Создать опросник")
+        self.assertContains(response, "Выгрузить Excel")
 
     def test_anonymous_staff_root_still_requires_login(self):
         response = self.client.get(reverse("staff_index"), follow=True)
