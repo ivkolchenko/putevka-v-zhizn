@@ -1,7 +1,0 @@
-{% extends 'surveys_builder/base.html' %}
-{% block content %}
-<h1>{{ heading }}</h1>
-{% if survey.is_draft %}
-<form method="post">{% csrf_token %}{% include 'surveys_builder/_revision.html' %}{{ form.as_p }}<button type="submit">Сохранить</button></form>
-{% else %}<p>Редактирование доступно только для черновика. Можно создать копию опросника на странице результатов.</p>{% endif %}
-{% endblock %}

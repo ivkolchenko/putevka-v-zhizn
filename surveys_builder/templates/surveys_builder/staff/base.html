@@ -1,0 +1,47 @@
+{% extends 'staff_templates/base_without_sidebar.html' %}
+{% load static %}
+
+{% block title %}Конструктор опросов · Путёвка в жизнь{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="{% static 'surveys_builder/css/builder.css' %}">
+{% endblock %}
+
+{% block content %}
+<div class="survey-builder container-xl">
+    <div class="builder-main">
+        <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 border-bottom pb-3 mb-4">
+            <div>
+                <a class="small text-decoration-none" href="{% url 'staff_surveys_list' %}">← Все опросы</a>
+                <div class="fw-semibold mt-1">Конструктор опросов</div>
+            </div>
+            <div class="d-flex flex-wrap gap-2">
+                <a class="btn btn-outline-secondary btn-sm" href="{% url 'surveys_builder:block_templates' %}">Библиотека блоков</a>
+                <a class="btn btn-primary btn-sm" href="{% url 'surveys_builder:constructor' %}">Создать опрос</a>
+                {% if survey and not survey.is_block_template %}
+                <a class="btn btn-outline-primary btn-sm" href="{% url 'surveys_builder:results' survey.pk %}">Результаты</a>
+                {% endif %}
+            </div>
+        </div>
+        {% if survey %}
+        <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+            <span class="fw-semibold">{{ survey.title }}</span>
+            <span class="badge rounded-pill text-bg-secondary">{{ survey.get_status_display }}</span>
+        </div>
+        {% endif %}
+        {% if workflow_step and user.is_staff and not survey.is_block_template %}
+            {% include 'surveys_builder/partials/_workflow_steps.html' %}
+        {% elif survey.is_block_template and user.is_staff %}
+            <p class="text-muted small mb-3">Библиотека · Черновик блока</p>
+        {% endif %}
+        {% if messages %}
+            {% for message in messages %}<div class="alert {% if message.tags == 'error' %}alert-danger{% else %}alert-{{ message.tags|default:'info' }}{% endif %}" role="status">{{ message }}</div>{% endfor %}
+        {% endif %}
+        {% block builder_content %}{% endblock %}
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{% static 'surveys_builder/js/editor.js' %}" defer></script>
+{% endblock %}

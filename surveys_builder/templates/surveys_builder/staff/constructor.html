@@ -1,0 +1,27 @@
+{% extends 'surveys_builder/staff/base.html' %}
+
+{% block builder_content %}
+<div class="page-heading mb-4">
+    <p class="text-primary fw-semibold small mb-2">Шаг 1 из 4</p>
+    <h1 class="h2 mb-2">Создадим опрос</h1>
+    <p class="text-muted mb-0">Сначала название, затем блоки с вопросами. Участников и срок выберете в конце.</p>
+</div>
+<form method="post" class="card shadow-sm border-0 editor-form" data-confirm-leave>
+    {% csrf_token %}
+    <div class="card-body p-4">
+        {{ form.non_field_errors }}
+        {% for field in form %}
+        <div class="mb-4">
+            <label class="form-label fw-semibold" for="{{ field.id_for_label }}">{{ field.label }}</label>
+            {{ field }}
+            {% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}
+            {% for error in field.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+        </div>
+        {% endfor %}
+        <div class="d-flex flex-wrap justify-content-between gap-2 border-top pt-3">
+            <a class="btn btn-outline-secondary" href="{% url 'staff_surveys_list' %}">Отмена</a>
+            <button class="btn btn-primary" type="submit">Далее: создать первый блок</button>
+        </div>
+    </div>
+</form>
+{% endblock %}

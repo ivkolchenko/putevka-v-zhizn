@@ -25,7 +25,7 @@ def survey_list(request):
     if not request.user.is_active:
         raise PermissionDenied
     assignments = SurveyAssignment.objects.filter(user=request.user).exclude(survey__status='draft').select_related('survey', 'response').order_by('-assigned_at', '-pk')
-    return render(request, 'surveys_builder/student_list.html', {
+    return render(request, 'surveys_builder/student/student_list.html', {
         'page_obj': Paginator(assignments, 25).get_page(request.GET.get('page')),
         'active': 'surveys',
     })
@@ -104,7 +104,7 @@ def answer(request, pk):
                 )
                 errors = error.messages
     all_response_sections = (response_sections(response) if response else pages) if (submitted or not survey.accepts_answers) else []
-    return render(request, 'surveys_builder/student_answer.html', {
+    return render(request, 'surveys_builder/student/student_answer.html', {
         'survey': survey, 'assignment': assignment, 'form': form, 'errors': errors,
         'response_revision': response.revision if response else 0,
         'submitted': submitted, 'read_only': submitted or not survey.accepts_answers,

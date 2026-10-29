@@ -1,0 +1,15 @@
+{% extends 'surveys_builder/staff/base.html' %}
+{% block builder_content %}
+<h1>Удалить опрос «{{ survey.title }}»?</h1>
+<p>Можно удалить опрос, пока на него нет ответов и черновиков. При удалении исчезнут вопросы, варианты и назначения получателям.</p>
+<p>Получателей: {{ counts.recipients }}. Ответов и черновиков: {{ counts.responses }},
+из них отправлено: {{ counts.submitted }}.</p>
+{% if counts.responses %}
+<p role="alert">Удаление недоступно: ответы и черновики учеников сохраняются. Завершите приём или переместите опрос в архив.</p>
+{% else %}
+<form method="post">{% csrf_token %}{% include 'surveys_builder/partials/_revision.html' %}
+    <button type="submit">Удалить опрос и назначения</button>
+</form>
+{% endif %}
+<p><a href="{% url 'staff_surveys_list' %}">Отмена — вернуться ко всем опросам</a></p>
+{% endblock %}

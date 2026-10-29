@@ -1,0 +1,23 @@
+{% for error in form.non_field_errors %}<div class="alert alert-danger" role="alert">{{ error }}</div>{% endfor %}
+{% for section in form.sections %}
+    <fieldset class="card shadow-sm mb-3">
+        <legend class="h5 px-3 pt-3 mb-0">{% if section.block %}{{ section.block.title }}{% else %}Общие вопросы{% endif %}</legend>
+        <div class="card-body">
+            {% if section.block.description %}<div class="text-muted mb-3">{{ section.block.description|linebreaks }}</div>{% endif %}
+            {% for item in section.items %}
+                {% if item.type == 'section' %}
+                    <div class="mb-4">{% include 'surveys_builder/partials/_text_section.html' with text_section=item.section %}</div>
+                {% else %}
+                {% with field=item.field %}
+                <div class="mb-4">
+                    <label for="{{ field.id_for_label }}" class="fw-semibold mb-2">{{ field.label }}{% if field.field.required %} <span class="text-danger" aria-label="обязательно">*</span>{% endif %}</label>
+                    {{ field }}
+                    {% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}
+                    {% for error in field.errors %}<div class="invalid-feedback d-block" role="alert">{{ error }}</div>{% endfor %}
+                </div>
+                {% endwith %}
+                {% endif %}
+            {% endfor %}
+        </div>
+    </fieldset>
+{% endfor %}

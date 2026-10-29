@@ -1,8 +1,0 @@
-{% extends 'surveys_builder/base.html' %}
-{% block content %}
-<h1>{{ heading }}</h1><p>{{ detail }}</p>
-{% if survey.is_draft or lifecycle %}
-<form method="post">{% csrf_token %}{% include 'surveys_builder/_revision.html' %}<button type="submit">Подтвердить</button></form>
-{% else %}<p>Структуру опубликованного опроса менять нельзя. Для изменений создайте копию опроса.</p>{% endif %}
-<p>{% if return_block %}<a href="{% url 'surveys_builder:block_content' survey.pk return_block.pk %}">Отмена — к блоку</a>{% else %}<a href="{% url 'surveys_builder:survey_detail' survey.pk %}">Вернуться к опроснику</a>{% endif %}</p>
-{% endblock %}

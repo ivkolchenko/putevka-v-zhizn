@@ -14,8 +14,8 @@ class SurveysBuilderForm(forms.ModelForm):
     class Meta:
         model = SurveysBuilder
         fields = ['title', 'description']
-        widgets = {'title': forms.TextInput(attrs={'placeholder': 'Например, «Обратная связь об учёбе»'}),
-                   'description': forms.Textarea(attrs={'rows': 3})}
+        widgets = {'title': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Например, «Обратная связь об учёбе»'}),
+                   'description': forms.Textarea(attrs={'class': 'form-control', 'rows': 3})}
         labels = {'description': 'Описание (необязательно)'}
 
 

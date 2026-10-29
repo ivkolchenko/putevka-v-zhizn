@@ -17,6 +17,16 @@ python manage.py runserver
 - API сотрудника: `/staff/surveys_builder/api/`.
 - API ученика: `/surveys/api/`.
 
+## Структура файлов
+
+- `models.py`, `forms.py`, `selectors.py`, `services.py` — данные, формы, выборки и операции с опросами.
+- `views.py`, `api.py`, `api_serializers.py`, `api_urls.py`, `urls.py` — страницы и API сотрудника.
+- `student_views.py`, `student_urls.py`, `student_api_urls.py` — страницы и маршруты ученика; ученический API обрабатывается в `api.py`.
+- `templates/surveys_builder/staff/` — страницы конструктора и результатов; `student/` — страницы ученика; `partials/` — общие фрагменты.
+- `static/surveys_builder/css/` и `static/surveys_builder/js/` — стили и скрипты конструктора.
+- `tests/` — тесты приложения. Адресный запуск: `python manage.py test surveys_builder.tests.test_rework`.
+- `management/commands/` и `demo_assets/` — команды и изображения для демонстрационных данных.
+
 ### Тестовые ученики
 
 `python manage.py seed_demo_students` добавляет 16 учеников с логинами

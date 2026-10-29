@@ -28,12 +28,12 @@ def page(request, template, survey=None, **context):
              'block_create': 2, 'block_content': 2, 'import_block_template': 2,
              'question_edit': 2, 'question_delete': 2, 'text_section_edit': 2,
              'text_section_create': 2, 'audience': 3, 'preview': 4}
-    return render(request, 'surveys_builder/' + template,
+    return render(request, 'surveys_builder/staff/' + template,
                   {'survey': survey, 'workflow_step': steps.get(route), **context})
 
 
 def failure(request, error, survey=None):
-    return render(request, 'surveys_builder/error.html',
+    return render(request, 'surveys_builder/staff/error.html',
                   {'survey': survey, 'errors': error.messages}, status=400)
 
 
