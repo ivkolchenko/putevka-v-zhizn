@@ -9,6 +9,7 @@ from . import services
 from .forms import ResponseForm
 from .models import SurveyAssignment, SurveyResponse
 from .views import response_sections
+from .selectors import assignment_blocks, assignment_questions
 
 
 @login_required
@@ -32,8 +33,8 @@ def answer(request, pk):
     response = SurveyResponse.objects.filter(assignment=assignment).first()
     submitted = response is not None and response.status == 'submitted'
     initial = {f'q_{a.question_id}': a.value for a in response.answers.all()} if response else {}
-    questions = list(survey.questions.select_related('block').prefetch_related('options'))
-    form = ResponseForm(questions=questions, initial=initial, blocks=survey.blocks.all())
+    questions = list(assignment_questions(assignment))
+    form = ResponseForm(questions=questions, initial=initial, blocks=assignment_blocks(assignment))
     errors = []
     if request.method == 'POST':
         action = request.POST.get('action')

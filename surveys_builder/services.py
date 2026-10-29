@@ -1,16 +1,17 @@
 """Все изменения выполняются здесь: права, этапы, транзакции и версии записей."""
 import hashlib
+import json
 
 from django.core import signing
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
-from django.db.models import Count, F, Max
+from django.db.models import Count, Max
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 
-from .forms import AudienceForm, QuestionBlockForm, QuestionsBuilderForm, ResponseForm, SurveysBuilderForm
-from .models import QuestionBlock, QuestionOptions, QuestionsBuilder, SurveyAnswer, SurveyAssignment, SurveyResponse, SurveysBuilder
-from .selectors import resolve_audience, student_name
+from .forms import AudienceForm, BlockTextSectionForm, BlockVisibilityForm, QuestionBlockForm, QuestionsBuilderForm, ResponseForm, SurveysBuilderForm
+from .models import BlockTextSection, QuestionBlock, QuestionOptions, QuestionsBuilder, SurveyAnswer, SurveyAssignment, SurveyResponse, SurveysBuilder
+from .selectors import assignment_questions, block_items, filter_students, resolve_audience, student_name, student_queryset
 
 
 class InvalidForm(Exception):
@@ -81,6 +82,8 @@ def update_survey(pk, actor, data, revision):
 def save_audience(pk, actor, data, revision):
     survey = locked_survey(pk, actor)
     require_draft(survey, revision)
+    if survey.is_block_template:
+        raise ValidationError('Черновик блока не назначается участникам.')
     form = AudienceForm(data)
     if not form.is_valid():
         raise InvalidForm(form)
@@ -90,7 +93,8 @@ def save_audience(pk, actor, data, revision):
     survey.audience_mode = form.cleaned_data['mode']
     survey.audience_filters = form.serialized_filters()
     survey.included_users.set(form.cleaned_data['included_users'])
-    survey.excluded_users.set(form.cleaned_data['excluded_users'])
+    survey.excluded_users.clear()
+    survey.deadline = form.cleaned_data['deadline']
     survey.audience_configured = True
     changed(survey)
     return survey
@@ -98,7 +102,7 @@ def save_audience(pk, actor, data, revision):
 
 def audience_for(survey):
     if not survey.audience_configured:
-        raise ValidationError('Сначала сохраните получателей на первом этапе.')
+        raise ValidationError('Сохраните получателей на этапе «Получатели и срок».')
     form = AudienceForm(AudienceForm.saved_data(survey))
     if not form.is_valid():
         raise ValidationError('Состав справочников изменился. Проверьте и заново сохраните получателей.')
@@ -108,11 +112,28 @@ def audience_for(survey):
 def normalize_question_positions(survey):
     questions = list(survey.questions.select_related('block'))
     questions.sort(key=lambda q: (q.block.position if q.block_id else 0,
-                                 q.block_id or 0, q.position, q.pk))
+                                 q.block_id or 0, q.block_position, q.pk))
     for position, question in enumerate(questions, 1):
         question.position = position
     QuestionsBuilder.objects.bulk_update(questions, ['position'])
     return {q.pk: q.position for q in questions}
+
+
+def visibility_form(data):
+    raw = data.get('visibility_filters', data)
+    if not isinstance(raw, dict) and not hasattr(raw, 'getlist'):
+        raise ValidationError('Фильтры видимости должны быть объектом.')
+    if 'visibility_filters' in data:
+        unknown = set(raw) - set(BlockVisibilityForm.base_fields) - {'_active_filters'}
+        if unknown:
+            raise ValidationError('Недопустимые фильтры видимости блока.')
+    values = raw.copy()
+    if '_active_filters' in values:
+        values['active_filters'] = values.pop('_active_filters')
+    form = BlockVisibilityForm(values)
+    if not form.is_valid():
+        raise InvalidForm(form)
+    return form
 
 
 @transaction.atomic
@@ -120,17 +141,76 @@ def save_block(pk, actor, data, revision, block_pk=None):
     survey = locked_survey(pk, actor)
     require_draft(survey, revision)
     if block_pk is None:
-        if survey.blocks.count() >= 50:
-            raise ValidationError('Допускается не более 50 блоков.')
+        if survey.blocks.count() >= (1 if survey.is_block_template else 50):
+            raise ValidationError('Лимит блоков достигнут.')
         block = QuestionBlock(survey=survey, position=(survey.blocks.aggregate(last=Max('position'))['last'] or 0) + 1)
     else:
         block = get_object_or_404(survey.blocks, pk=block_pk)
     form = QuestionBlockForm(data, instance=block)
     if not form.is_valid():
         raise InvalidForm(form)
-    block = form.save()
+    filters = visibility_form(data)
+    block = form.save(commit=False)
+    block.visibility_filters = filters.serialized_filters()
+    block.save()
+    if survey.is_block_template:
+        survey.title, survey.description = block.title, block.description
     changed(survey)
     return block
+
+
+def write_items(block, items):
+    questions, sections = [], []
+    for position, item in enumerate(items, 1):
+        if item['type'] == 'question':
+            question = item['question']
+            question.block_position = position
+            questions.append(question)
+        else:
+            section = item['section']
+            section.position = position
+            sections.append(section)
+    QuestionsBuilder.objects.bulk_update(questions, ['block_position'])
+    BlockTextSection.objects.bulk_update(sections, ['position'])
+
+
+@transaction.atomic
+def save_text_section(pk, block_pk, actor, data, files, revision, section_pk=None):
+    survey = locked_survey(pk, actor)
+    require_draft(survey, revision)
+    block = get_object_or_404(survey.blocks, pk=block_pk)
+    if section_pk is None and block.text_sections.count() >= 100:
+        raise ValidationError('В блоке допускается не более 100 текстовых секций.')
+    section = get_object_or_404(block.text_sections, pk=section_pk) if section_pk else BlockTextSection(block=block, position=len(block_items(block)) + 1)
+    form = BlockTextSectionForm(data, files, instance=section)
+    if not form.is_valid():
+        raise InvalidForm(form)
+    section = form.save()
+    changed(survey)
+    return section
+
+
+@transaction.atomic
+def text_section_action(pk, block_pk, section_pk, actor, action, revision):
+    survey = locked_survey(pk, actor)
+    require_draft(survey, revision)
+    block = get_object_or_404(survey.blocks, pk=block_pk)
+    section = get_object_or_404(block.text_sections, pk=section_pk)
+    items = block_items(block)
+    index = next(i for i, item in enumerate(items) if item['type'] == 'section' and item['id'] == section.pk)
+    if action == 'delete':
+        section.delete()
+        items.pop(index)
+    elif action in ('up', 'down'):
+        target = index + (-1 if action == 'up' else 1)
+        if 0 <= target < len(items):
+            items[index], items[target] = items[target], items[index]
+    else:
+        raise ValidationError('Неизвестное действие с секцией.')
+    write_items(block, items)
+    normalize_question_positions(survey)
+    changed(survey)
+    return survey
 
 
 def write_block_order(survey, blocks):
@@ -149,8 +229,8 @@ def block_action(pk, block_pk, actor, action, revision):
     blocks = list(survey.blocks.all())
     index = next(i for i, item in enumerate(blocks) if item.pk == block.pk)
     if action == 'delete':
-        last = survey.questions.aggregate(last=Max('position'))['last'] or 0
-        block.questions.update(block=None, position=F('position') + last)
+        if survey.is_block_template:
+            raise ValidationError('Удалите черновик целиком через библиотеку блоков.')
         block.delete()
         blocks.pop(index)
     elif action in ('up', 'down'):
@@ -178,11 +258,11 @@ def reorder_blocks(pk, actor, block_ids, revision):
 def save_question(pk, actor, data, revision, question_pk=None):
     survey = locked_survey(pk, actor)
     require_draft(survey, revision)
-    if not survey.audience_configured:
-        raise ValidationError('Сначала выберите получателей.')
     if question_pk is None:
         if survey.questions.count() >= 100:
             raise ValidationError('Допускается не более 100 вопросов.')
+        if not data.get('block'):
+            raise ValidationError('Сначала создайте блок и выберите его для вопроса.')
         question = QuestionsBuilder(survey=survey)
         question.position = (survey.questions.aggregate(last=Max('position'))['last'] or 0) + 1
     else:
@@ -195,8 +275,8 @@ def save_question(pk, actor, data, revision, question_pk=None):
     if not form.is_valid():
         raise InvalidForm(form)
     question = form.save(commit=False)
-    if question_pk is not None and question.block_id != original_block:
-        question.position = (survey.questions.aggregate(last=Max('position'))['last'] or 0) + 1
+    if question_pk is None or question.block_id != original_block:
+        question.block_position = len(block_items(question.block)) + 1
     question.save()
     form.save_options(question)
     question.position = normalize_question_positions(survey)[question.pk]
@@ -209,29 +289,25 @@ def question_action(pk, question_pk, actor, action, revision):
     survey = locked_survey(pk, actor)
     require_draft(survey, revision)
     question = get_object_or_404(survey.questions, pk=question_pk)
-    questions = list(survey.questions.filter(block_id=question.block_id))
-    index = next(i for i, q in enumerate(questions) if q.pk == question.pk)
+    items = block_items(question.block)
+    index = next(i for i, item in enumerate(items) if item['type'] == 'question' and item['id'] == question.pk)
     if action == 'delete':
         question.delete()
-        questions.pop(index)
+        items.pop(index)
     elif action == 'duplicate':
         if survey.questions.count() >= 100:
             raise ValidationError('Допускается не более 100 вопросов.')
-        copy = QuestionsBuilder.objects.create(survey=survey, block=question.block, title=question.title, description=question.description,
-                                               answer_type=question.answer_type, required=question.required, position=index + 1)
-        QuestionOptions.objects.bulk_create([
-            QuestionOptions(question=copy, text=o.text, position=o.position) for o in question.options.all()
-        ])
-        questions.insert(index + 1, copy)
+        copy = QuestionsBuilder.objects.create(survey=survey, block=question.block, title=question.title,
+            description=question.description, answer_type=question.answer_type, required=question.required)
+        QuestionOptions.objects.bulk_create([QuestionOptions(question=copy, text=o.text, position=o.position) for o in question.options.all()])
+        items.insert(index + 1, {'type': 'question', 'question': copy, 'id': copy.pk})
     elif action in ('up', 'down'):
         target = index + (-1 if action == 'up' else 1)
-        if 0 <= target < len(questions):
-            questions[index], questions[target] = questions[target], questions[index]
+        if 0 <= target < len(items):
+            items[index], items[target] = items[target], items[index]
     else:
         raise ValidationError('Неизвестное действие с вопросом.')
-    for position, item in enumerate(questions, 1):
-        item.position = position
-    QuestionsBuilder.objects.bulk_update(questions, ['position'])
+    write_items(question.block, items)
     normalize_question_positions(survey)
     changed(survey)
 
@@ -243,43 +319,76 @@ def reorder_questions(pk, actor, question_ids, revision):
     questions = {q.pk: q for q in survey.questions.all()}
     if len(question_ids) != len(questions) or set(question_ids) != set(questions):
         raise ValidationError('Передайте все вопросы этого опроса ровно по одному разу.')
-    ranks = {None: 0, **{block.pk: i for i, block in enumerate(survey.blocks.all(), 1)}}
+    ranks = {block.pk: i for i, block in enumerate(survey.blocks.all())}
     order = [ranks[questions[pk].block_id] for pk in question_ids]
     if order != sorted(order):
-        raise ValidationError('Вопросы можно переставлять внутри блока. Для перестановки блоков измените их порядок.')
-    ordered = []
-    for position, question_id in enumerate(question_ids, 1):
-        question = questions[question_id]
-        question.position = position
-        ordered.append(question)
-    QuestionsBuilder.objects.bulk_update(ordered, ['position'])
+        raise ValidationError('Вопросы переставляются внутри блоков; отдельно меняется порядок блоков.')
+    for block in survey.blocks.all():
+        ordered = iter(questions[pk] for pk in question_ids if questions[pk].block_id == block.pk)
+        items = block_items(block)
+        for item in items:
+            if item['type'] == 'question':
+                item['question'] = next(ordered)
+        write_items(block, items)
+    normalize_question_positions(survey)
     changed(survey)
     return survey
 
 
+def block_visibility(survey, users):
+    users = list(users)
+    result = {user.pk: [] for user in users}
+    base = student_queryset().filter(pk__in=result)
+    for block in survey.blocks.all():
+        try:
+            form = visibility_form({'visibility_filters': block.visibility_filters})
+        except InvalidForm:
+            raise ValidationError(f'Проверьте фильтры видимости блока «{block.title}».')
+        for user_id in filter_students(base, form.cleaned_data).values_list('pk', flat=True):
+            result[user_id].append(block.pk)
+    return result
+
+
+def visibility_fingerprint(survey, ids):
+    mapping = block_visibility(survey, student_queryset().filter(pk__in=ids))
+    return hashlib.sha256(json.dumps(mapping, sort_keys=True).encode()).hexdigest()
+
+
 def publication_errors(survey):
     errors = []
+    if survey.is_block_template:
+        errors.append('Черновик блока используется через вставку в опрос и не публикуется самостоятельно.')
     if not survey.title.strip():
         errors.append('Укажите название опросника.')
     if survey.deadline and survey.deadline <= timezone.now():
         errors.append('Срок ответа уже истёк.')
     blocks = list(survey.blocks.annotate(question_count=Count('questions')))
     block_ids = {block.pk for block in blocks}
+    if not blocks:
+        errors.append('Добавьте хотя бы один блок.')
     if len(blocks) > 50:
         errors.append('Допускается не более 50 блоков.')
     for block in blocks:
         if not block.title.strip():
             errors.append('Укажите название каждого блока.')
-        if not block.question_count:
-            errors.append(f'Блок «{block.title}»: добавьте хотя бы один вопрос или удалите блок.')
+        if not block.question_count and not block.text_sections.exists():
+            errors.append(f'Блок «{block.title}»: добавьте вопрос, текст или картинку.')
+        try:
+            visibility_form({'visibility_filters': block.visibility_filters})
+        except (InvalidForm, ValidationError):
+            errors.append(f'Проверьте фильтры блока «{block.title}».')
     try:
-        if not audience_for(survey).exists():
+        users = list(audience_for(survey))
+        if not users:
             errors.append('В выборке больше нет получателей.')
+        elif blocks:
+            mapping = block_visibility(survey, users)
+            missing = sum(not ids for ids in mapping.values())
+            if missing:
+                errors.append(f'Для {missing} получателей нет видимых блоков. Проверьте фильтры блоков или назначения.')
     except ValidationError as error:
         errors.extend(error.messages)
     questions = list(survey.questions.prefetch_related('options'))
-    if not questions:
-        errors.append('Добавьте хотя бы один вопрос.')
     if len(questions) > 100:
         errors.append('Допускается не более 100 вопросов.')
     for index, question in enumerate(questions, 1):
@@ -300,7 +409,7 @@ def audience_fingerprint(ids):
 
 def publish_token(survey, actor, ids):
     return signing.dumps({'survey': survey.pk, 'actor': actor.pk, 'revision': survey.revision,
-                          'audience': audience_fingerprint(ids)}, salt='surveys-builder.publish')
+                          'audience': audience_fingerprint(ids), 'visibility': visibility_fingerprint(survey, ids)}, salt='surveys-builder.publish')
 
 
 @transaction.atomic
@@ -324,10 +433,13 @@ def publish_survey(pk, actor, token):
     users = list(audience_for(survey))
     if confirmation.get('audience') != audience_fingerprint([u.pk for u in users]):
         raise ValidationError('Получатели изменились после предпросмотра. Проверьте список заново.')
+    if confirmation.get('visibility') != visibility_fingerprint(survey, [user.pk for user in users]):
+        raise ValidationError('Видимость блоков изменилась после предпросмотра. Проверьте опрос заново.')
+    mapping = block_visibility(survey, users)
     assignments = []
     for user in users:
         info = getattr(user, 'user_info', None)
-        assignments.append(SurveyAssignment(survey=survey, user=user, recipient_snapshot={
+        assignments.append(SurveyAssignment(survey=survey, user=user, visible_block_ids=mapping[user.pk], recipient_snapshot={
             'name': student_name(user), 'username': user.get_username(),
             'grade': info.next_year_class_digit if info else None,
             'profile': info.internal_study_profile if info else None,
@@ -368,25 +480,66 @@ def delete_survey(pk, actor, revision, *, allow_published=False):
     survey.delete()
 
 
+def clone_block(source, target, position):
+    block = QuestionBlock.objects.create(survey=target, title=source.title, description=source.description,
+        position=position, visibility_filters=source.visibility_filters)
+    for question in source.questions.prefetch_related('options'):
+        copy = QuestionsBuilder.objects.create(survey=target, block=block, title=question.title,
+            description=question.description, answer_type=question.answer_type, required=question.required,
+            position=question.position, block_position=question.block_position)
+        QuestionOptions.objects.bulk_create([QuestionOptions(question=copy, text=o.text, position=o.position) for o in question.options.all()])
+    BlockTextSection.objects.bulk_create([BlockTextSection(block=block, title=section.title, text=section.text,
+        image=section.image.name, image_alt=section.image_alt, position=section.position) for section in source.text_sections.all()])
+    return block
+
+
 @transaction.atomic
 def copy_survey(pk, actor):
     source = locked_survey(pk, actor)
-    copy = SurveysBuilder.objects.create(
-        author=actor, title=source.title[:192] + ' (копия)', description=source.description,
+    copy = SurveysBuilder.objects.create(author=actor, title=source.title[:192] + ' (копия)', description=source.description,
         audience_mode=source.audience_mode, audience_filters=source.audience_filters,
-        audience_configured=source.audience_configured,
-    )
+        audience_configured=False, is_block_template=source.is_block_template)
     copy.included_users.set(source.included_users.all())
-    copy.excluded_users.set(source.excluded_users.all())
-    blocks = {block.pk: QuestionBlock.objects.create(survey=copy, title=block.title,
-        description=block.description, position=block.position) for block in source.blocks.all()}
-    for question in source.questions.prefetch_related('options'):
-        duplicate = QuestionsBuilder.objects.create(survey=copy, block=blocks.get(question.block_id), title=question.title, description=question.description,
-                                                     answer_type=question.answer_type, required=question.required, position=question.position)
-        QuestionOptions.objects.bulk_create([
-            QuestionOptions(question=duplicate, text=o.text, position=o.position) for o in question.options.all()
-        ])
+    for block in source.blocks.all():
+        clone_block(block, copy, block.position)
     return copy
+
+
+@transaction.atomic
+def create_block_template(actor, data, *, source_pk=None, block_pk=None, revision=None):
+    require_staff(actor)
+    if source_pk is not None:
+        source_survey = locked_survey(source_pk, actor)
+        check_revision(source_survey, revision)
+        source = get_object_or_404(source_survey.blocks, pk=block_pk)
+        template = SurveysBuilder.objects.create(author=actor, title=source.title, description=source.description, is_block_template=True)
+        clone_block(source, template, 1)
+        return template
+    form = QuestionBlockForm(data)
+    if not form.is_valid():
+        raise InvalidForm(form)
+    template = SurveysBuilder.objects.create(author=actor, title=form.cleaned_data['title'],
+        description=form.cleaned_data['description'], is_block_template=True)
+    save_block(template.pk, actor, data, template.revision)
+    template.refresh_from_db()
+    return template
+
+
+@transaction.atomic
+def import_block_template(pk, actor, template_pk, revision):
+    target = locked_survey(pk, actor)
+    require_draft(target, revision)
+    if target.is_block_template or target.blocks.count() >= 50:
+        raise ValidationError('Нельзя добавить блок в этот черновик или превышен лимит блоков.')
+    source = locked_survey(template_pk, actor)
+    if not source.is_block_template:
+        raise ValidationError('Выберите черновик из библиотеки блоков.')
+    if target.questions.count() + source.questions.count() > 100:
+        raise ValidationError('Допускается не более 100 вопросов в опросе.')
+    block = clone_block(source.blocks.get(), target, (target.blocks.aggregate(last=Max('position'))['last'] or 0) + 1)
+    normalize_question_positions(target)
+    changed(target)
+    return block
 
 
 @transaction.atomic
@@ -408,7 +561,7 @@ def save_response(assignment_pk, actor, data, *, final, revision):
         raise ValidationError('Обновите страницу перед сохранением ответа.')
     if expected != (response.revision if response else 0):
         raise RevisionConflict('Ответ изменён в другой вкладке. Обновите страницу.')
-    questions = list(survey.questions.select_related('block').prefetch_related('options'))
+    questions = list(assignment_questions(assignment))
     form = ResponseForm(data, questions=questions, final=final)
     if not form.is_valid():
         raise InvalidForm(form)

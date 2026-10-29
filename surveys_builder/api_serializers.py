@@ -1,23 +1,37 @@
 """Явный JSON-контракт: личные настройки аудитории выдаются только сотрудникам."""
 from . import services
 from .forms import AudienceForm
+from .selectors import block_items
+from django.urls import reverse
 
 
 def question_data(question):
     return {
         'id': question.pk, 'title': question.title, 'description': question.description,
-        'block_id': question.block_id,
+        'block_id': question.block_id, 'block_position': question.block_position,
         'answer_type': question.answer_type, 'required': question.required,
         'position': question.position,
         'options': [{'id': o.pk, 'text': o.text, 'position': o.position} for o in question.options.all()],
     }
 
 
-def block_data(block):
-    return {'id': block.pk, 'title': block.title, 'description': block.description, 'position': block.position}
+def section_data(section):
+    return {'id': section.pk, 'title': section.title, 'text': section.text,
+            'image_url': reverse('surveys_builder:section_image', args=[section.pk]) if section.image else None,
+            'image_alt': section.image_alt, 'position': section.position}
 
 
-def survey_data(survey, *, detail=False, staff=True):
+def block_data(block, *, staff=True):
+    data = {'id': block.pk, 'title': block.title, 'description': block.description, 'position': block.position,
+            'items': [{'type': item['type'], 'id': item['id'],
+                       **({'section': section_data(item['section'])} if item['type'] == 'section' else {})}
+                      for item in block_items(block)]}
+    if staff:
+        data['visibility_filters'] = block.visibility_filters
+    return data
+
+
+def survey_data(survey, *, detail=False, staff=True, block_ids=None):
     data = {
         'id': survey.pk, 'title': survey.title, 'description': survey.description,
         'status': survey.status, 'deadline': survey.deadline,
@@ -27,12 +41,14 @@ def survey_data(survey, *, detail=False, staff=True):
     if staff:
         data.update(revision=survey.revision, author_id=survey.author_id,
                     created_at=survey.created_at, updated_at=survey.updated_at,
-                    audience_configured=survey.audience_configured)
+                    audience_configured=survey.audience_configured, is_block_template=survey.is_block_template)
         if detail:
             data['audience'] = AudienceForm.saved_data(survey)
     if detail:
-        data['blocks'] = [block_data(block) for block in survey.blocks.all()]
-        data['questions'] = [question_data(q) for q in survey.questions.prefetch_related('options')]
+        blocks = survey.blocks.all() if staff else survey.blocks.filter(pk__in=block_ids or [])
+        questions = survey.questions.all() if staff else survey.questions.filter(block_id__in=block_ids or [])
+        data['blocks'] = [block_data(block, staff=staff) for block in blocks.prefetch_related('questions', 'text_sections')]
+        data['questions'] = [question_data(q) for q in questions.prefetch_related('options')]
     return data
 
 

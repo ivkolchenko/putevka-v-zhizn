@@ -4,6 +4,8 @@ from . import views
 app_name = 'surveys_builder'
 urlpatterns = [
     path('api/', include('surveys_builder.api_urls')),
+    path('block-templates/', views.block_templates, name='block_templates'),
+    path('section-images/<int:section_pk>/', views.section_image, name='section_image'),
     path('', views.constructor, name='constructor'),
     path('<int:pk>/', views.survey_detail, name='survey_detail'),
     path('<int:pk>/edit/', views.survey_edit, name='survey_edit'),
@@ -17,6 +19,12 @@ urlpatterns = [
     path('<int:pk>/results/export/', views.results_csv, name='results_csv'),
     path('<int:pk>/results/<int:response_pk>/', views.response_detail, name='response_detail'),
     path('<int:pk>/blocks/create/', views.block_edit, name='block_create'),
+    path('<int:pk>/blocks/import/', views.import_block_template, name='import_block_template'),
+    path('<int:pk>/blocks/<int:block_pk>/content/', views.block_content, name='block_content'),
+    path('<int:pk>/blocks/<int:block_pk>/save-template/', views.save_block_template, name='save_block_template'),
+    path('<int:pk>/blocks/<int:block_pk>/sections/create/', views.text_section_edit, name='text_section_create'),
+    path('<int:pk>/blocks/<int:block_pk>/sections/<int:section_pk>/', views.text_section_edit, name='text_section_edit'),
+    path('<int:pk>/blocks/<int:block_pk>/sections/<int:section_pk>/<str:action>/', views.text_section_action, name='text_section_action'),
     path('<int:pk>/blocks/<int:block_pk>/', views.block_edit, name='block_edit'),
     path('<int:pk>/blocks/<int:block_pk>/delete/', views.block_delete, name='block_delete'),
     path('<int:pk>/blocks/<int:block_pk>/<str:action>/', views.block_action, name='block_action'),

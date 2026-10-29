@@ -1,24 +1,35 @@
 """Серверные страницы конструктора. Каждое изменение — POST с CSRF."""
 import csv
 import re
+import mimetypes
+
+from django import forms
 
 from django.contrib import messages
 from django.contrib.admin.views.decorators import staff_member_required
+from django.contrib.auth.decorators import login_required
 from django.core.exceptions import ValidationError
 from django.core.paginator import Paginator
+from django.db import transaction
 from django.db.models import Count, Q
-from django.http import StreamingHttpResponse
+from django.http import FileResponse, Http404, StreamingHttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_http_methods, require_POST
 
 from . import services
-from .forms import AudienceForm, QuestionBlockForm, QuestionsBuilderForm, ResponseForm, SurveyListFilterForm, SurveysBuilderForm
-from .models import SurveyResponse, SurveysBuilder
-from .selectors import group_questions, resolve_audience, student_name
+from .forms import AudienceForm, BlockTextSectionForm, BlockVisibilityForm, QuestionBlockForm, QuestionsBuilderForm, SurveyListFilterForm, SurveysBuilderForm
+from .models import BlockTextSection, SurveyAssignment, SurveyResponse, SurveysBuilder
+from .selectors import assignment_blocks, assignment_questions, block_items, group_questions, resolve_audience, student_name
 
 
 def page(request, template, survey=None, **context):
-    return render(request, 'surveys_builder/' + template, {'survey': survey, **context})
+    route = getattr(getattr(request, 'resolver_match', None), 'url_name', '')
+    steps = {'constructor': 1, 'survey_edit': 1, 'survey_detail': 2, 'block_edit': 2,
+             'block_create': 2, 'block_content': 2, 'import_block_template': 2,
+             'question_edit': 2, 'question_delete': 2, 'text_section_edit': 2,
+             'text_section_create': 2, 'audience': 3, 'preview': 4}
+    return render(request, 'surveys_builder/' + template,
+                  {'survey': survey, 'workflow_step': steps.get(route), **context})
 
 
 def failure(request, error, survey=None):
@@ -34,11 +45,11 @@ def get_survey(pk):
 @require_http_methods(['GET'])
 def survey_list(request):
     form = SurveyListFilterForm(request.GET)
-    surveys = SurveysBuilder.objects.select_related('author').annotate(
+    surveys = SurveysBuilder.objects.filter(is_block_template=False).select_related('author').annotate(
         recipient_count=Count('assignments'),
         submitted_count=Count('assignments', filter=Q(assignments__response__status=SurveyResponse.Status.SUBMITTED)),
     ).order_by('-created_at', '-pk')
-    total_count = SurveysBuilder.objects.count()
+    total_count = SurveysBuilder.objects.filter(is_block_template=False).count()
     if form.is_valid():
         if form.cleaned_data['status']:
             surveys = surveys.filter(status=form.cleaned_data['status'])
@@ -62,7 +73,7 @@ def constructor(request):
     if request.method == 'POST':
         try:
             survey = services.create_survey(request.user, request.POST)
-            return redirect('surveys_builder:audience', pk=survey.pk)
+            return redirect('surveys_builder:block_create', pk=survey.pk)
         except services.InvalidForm as error:
             form = error.form
     return page(request, 'constructor.html', form=form)
@@ -76,19 +87,19 @@ def survey_edit(request, pk):
     if request.method == 'POST':
         try:
             services.update_survey(pk, request.user, request.POST, request.POST.get('revision'))
-            return redirect('surveys_builder:audience', pk=pk)
+            return redirect('surveys_builder:survey_detail', pk=pk)
         except services.InvalidForm as error:
             form = error.form
         except ValidationError as error:
             return failure(request, error, survey)
-    return page(request, 'edit.html', survey, form=form, heading='Название и срок ответа')
+    return page(request, 'edit.html', survey, form=form, heading='Название и описание опроса')
 
 
 @staff_member_required
 @require_http_methods(['GET', 'POST'])
 def audience(request, pk):
     survey = get_survey(pk)
-    initial = AudienceForm.saved_data(survey) if survey.audience_configured else {'mode': 'filters', 'account_active': 'yes'}
+    initial = AudienceForm.saved_data(survey) if survey.audience_configured else {'mode': 'filters', 'deadline': survey.deadline}
     form = AudienceForm(initial=initial)
     recipients = None
     if request.method == 'POST':
@@ -101,7 +112,7 @@ def audience(request, pk):
                 if action == 'reset':
                     data = AudienceForm.empty_data()
                 elif clear_field:
-                    if clear_field not in (*AudienceForm.FILTER_FIELDS, 'included_users', 'excluded_users'):
+                    if clear_field not in (*AudienceForm.FILTER_FIELDS, 'included_users'):
                         raise ValidationError('Неизвестный фильтр.')
                     data.pop(clear_field, None)
                 form = AudienceForm(data)
@@ -109,7 +120,7 @@ def audience(request, pk):
                     recipients = resolve_audience(form.cleaned_data)
             elif action == 'save':
                 services.save_audience(pk, request.user, request.POST, request.POST.get('revision'))
-                return redirect('surveys_builder:survey_detail', pk=pk)
+                return redirect('surveys_builder:preview', pk=pk)
             else:
                 raise ValidationError('Неизвестное действие.')
         except services.InvalidForm as error:
@@ -133,20 +144,16 @@ def audience(request, pk):
 @require_http_methods(['GET', 'POST'])
 def survey_detail(request, pk):
     survey = get_survey(pk)
-    if request.method == 'GET' and survey.is_draft and not survey.audience_configured:
-        return redirect('surveys_builder:audience', pk=pk)
+    if survey.is_block_template and request.method == 'GET':
+        return redirect('surveys_builder:block_content', pk=pk, block_pk=survey.blocks.get().pk)
     form = QuestionsBuilderForm(survey=survey, initial={'block': request.GET.get('block')})
     if request.method == 'POST':
-        try:
-            services.save_question(pk, request.user, request.POST, request.POST.get('revision'))
-            return redirect('surveys_builder:survey_detail', pk=pk)
-        except services.InvalidForm as error:
-            form = error.form
-        except ValidationError as error:
-            return failure(request, error, survey)
+        return failure(request, ValidationError('Добавляйте вопросы на странице выбранного блока.'), survey)
     questions = list(survey.questions.prefetch_related('options'))
+    sections = group_questions(questions, survey.blocks.prefetch_related('text_sections'))
     return page(request, 'survey_detail.html', survey, form=form, questions=questions,
-                sections=group_questions(questions, survey.blocks.all()))
+                sections=sections, empty_blocks=[s['block'] for s in sections if not s['items']],
+                structure_ready=bool(sections) and all(s['items'] for s in sections), can_add_block=len(sections) < 50)
 
 
 @staff_member_required
@@ -155,16 +162,32 @@ def block_edit(request, pk, block_pk=None):
     survey = get_survey(pk)
     block = get_object_or_404(survey.blocks, pk=block_pk) if block_pk else None
     form = QuestionBlockForm(instance=block)
+    visibility = BlockVisibilityForm(initial=block.visibility_filters if block else {})
     if request.method == 'POST':
         try:
-            services.save_block(pk, request.user, request.POST, request.POST.get('revision'), block_pk)
-            return redirect('surveys_builder:survey_detail', pk=pk)
+            save_template = request.POST.get('action') == 'save_template' and not survey.is_block_template
+            with transaction.atomic():
+                saved = services.save_block(pk, request.user, request.POST, request.POST.get('revision'), block_pk)
+                if save_template:
+                    services.create_block_template(request.user, {}, source_pk=pk, block_pk=saved.pk,
+                        revision=saved.survey.revision)
+            if save_template:
+                messages.success(request, 'Блок сохранён в опросе. Отдельная копия добавлена в шаблоны.')
+            else:
+                messages.success(request, 'Настройки блока сохранены.' if block else 'Блок создан. Добавьте вопрос или текст.')
+            return redirect('surveys_builder:block_content', pk=pk, block_pk=saved.pk)
         except services.InvalidForm as error:
             form = error.form
         except ValidationError as error:
             return failure(request, error, survey)
-    return page(request, 'edit.html', survey, form=form,
-                heading='Редактировать блок' if block else 'Добавить блок вопросов')
+    if request.method == 'POST':
+        form = QuestionBlockForm(request.POST, instance=block)
+        visibility = BlockVisibilityForm(request.POST)
+        form.is_valid()
+        visibility.is_valid()
+    return page(request, 'block_edit.html', survey, form=form, visibility_form=visibility,
+                edited_block=block, show_visibility=bool(visibility.errors) or any(g['active'] for g in visibility.filter_groups),
+                heading='Редактировать блок' if block else 'Добавить блок')
 
 
 @staff_member_required
@@ -179,7 +202,7 @@ def block_delete(request, pk, block_pk):
         except ValidationError as error:
             return failure(request, error, survey)
     return page(request, 'confirm.html', survey, heading=f'Удалить блок «{block.title}»?',
-                detail='Вопросы сохранятся и будут перенесены в раздел «Без блока».')
+                detail='Блок, все его вопросы, текстовые секции и картинки в опросе будут удалены.')
 
 
 @staff_member_required
@@ -200,13 +223,14 @@ def question_edit(request, pk, question_pk):
     form = QuestionsBuilderForm(instance=question)
     if request.method == 'POST':
         try:
-            services.save_question(pk, request.user, request.POST, request.POST.get('revision'), question_pk)
-            return redirect('surveys_builder:survey_detail', pk=pk)
+            saved = services.save_question(pk, request.user, request.POST, request.POST.get('revision'), question_pk)
+            messages.success(request, 'Вопрос сохранён.')
+            return redirect('surveys_builder:block_content', pk=pk, block_pk=saved.block_id)
         except services.InvalidForm as error:
             form = error.form
         except ValidationError as error:
             return failure(request, error, survey)
-    return page(request, 'edit.html', survey, form=form, heading='Редактирование вопроса')
+    return page(request, 'question_edit.html', survey, form=form, edited_block=question.block, heading='Редактирование вопроса')
 
 
 @staff_member_required
@@ -217,20 +241,21 @@ def question_delete(request, pk, question_pk):
     if request.method == 'POST':
         try:
             services.question_action(pk, question_pk, request.user, 'delete', request.POST.get('revision'))
-            return redirect('surveys_builder:survey_detail', pk=pk)
+            return redirect('surveys_builder:block_content', pk=pk, block_pk=question.block_id)
         except ValidationError as error:
             return failure(request, error, survey)
-    return page(request, 'confirm.html', survey, heading='Удалить вопрос?', detail=question.title)
+    return page(request, 'confirm.html', survey, heading='Удалить вопрос?', detail=question.title, return_block=question.block)
 
 
 @staff_member_required
 @require_POST
 def question_action(request, pk, question_pk, action):
+    question = get_object_or_404(get_survey(pk).questions, pk=question_pk)
     try:
         services.question_action(pk, question_pk, request.user, action, request.POST.get('revision'))
     except ValidationError as error:
         return failure(request, error, get_survey(pk))
-    return redirect('surveys_builder:survey_detail', pk=pk)
+    return redirect('surveys_builder:block_content', pk=pk, block_pk=question.block_id)
 
 
 @staff_member_required
@@ -241,7 +266,7 @@ def survey_delete(request, pk):
         try:
             services.delete_survey(pk, request.user, request.POST.get('revision'), allow_published=True)
             messages.success(request, 'Опрос и связанные с ним назначения и ответы удалены.')
-            return redirect('staff_surveys_list')
+            return redirect('surveys_builder:block_templates' if survey.is_block_template else 'staff_surveys_list')
         except ValidationError as error:
             return failure(request, error, survey)
     counts = survey.assignments.aggregate(
@@ -252,20 +277,18 @@ def survey_delete(request, pk):
 
 
 @staff_member_required
-@require_http_methods(['GET', 'POST'])
+@require_http_methods(['GET'])
 def preview(request, pk):
     survey = get_survey(pk)
     questions = list(survey.questions.select_related('block').prefetch_related('options'))
-    form = ResponseForm(request.POST if request.method == 'POST' else None, questions=questions, blocks=survey.blocks.all())
-    if request.method == 'POST' and form.is_valid():
-        messages.success(request, 'Проверка пройдена. Это предпросмотр: ответы не сохранялись.')
-    errors = services.publication_errors(survey) if survey.is_draft else []
-    recipients = services.audience_for(survey) if survey.is_draft and not errors else None
+    errors = services.publication_errors(survey) if survey.is_draft and not survey.is_block_template else []
+    recipients = services.audience_for(survey) if survey.is_draft and not survey.is_block_template and not errors else None
     ids = list(recipients.values_list('pk', flat=True)) if recipients is not None else []
-    token = services.publish_token(survey, request.user, ids) if survey.is_draft and not errors else None
+    token = services.publish_token(survey, request.user, ids) if recipients is not None and not errors else None
     recipient_page = Paginator(recipients, 50).get_page(request.GET.get('page')) if recipients is not None else None
     recipient_rows = [(student_name(u), u.get_username()) for u in recipient_page] if recipient_page is not None else []
-    return page(request, 'preview.html', survey, form=form, errors=errors, publish_token=token,
+    return page(request, 'preview.html', survey, errors=errors, publish_token=token,
+                sections=group_questions(questions, survey.blocks.prefetch_related('text_sections')),
                 page_obj=recipient_page, recipients=recipient_rows)
 
 
@@ -301,7 +324,7 @@ def lifecycle(request, pk, action):
 @require_POST
 def survey_copy(request, pk):
     survey = services.copy_survey(pk, request.user)
-    return redirect('surveys_builder:audience', pk=survey.pk)
+    return redirect('surveys_builder:survey_detail', pk=survey.pk)
 
 
 @staff_member_required
@@ -322,11 +345,14 @@ def response_rows(response):
 
 
 def response_sections(response):
-    survey = response.assignment.survey
+    assignment = response.assignment
     values = {a.question_id: a.value for a in response.answers.all()}
-    return [{'block': section['block'],
-             'rows': [(q.title, services.answer_display(q, values.get(q.pk))) for q in section['questions']]}
-            for section in group_questions(survey.questions.prefetch_related('options'), survey.blocks.all())]
+    sections = group_questions(assignment_questions(assignment), assignment_blocks(assignment))
+    for section in sections:
+        for item in section['items']:
+            if item['type'] == 'question':
+                item['value'] = services.answer_display(item['question'], values.get(item['question'].pk))
+    return sections
 
 
 @staff_member_required
@@ -371,3 +397,127 @@ def results_csv(request, pk):
     result = StreamingHttpResponse(rows(), content_type='text/csv; charset=utf-8')
     result['Content-Disposition'] = f'attachment; filename="survey-{survey.pk}-results.csv"'
     return result
+
+
+@staff_member_required
+@require_http_methods(['GET', 'POST'])
+def block_content(request, pk, block_pk):
+    survey = get_survey(pk)
+    block = get_object_or_404(survey.blocks, pk=block_pk)
+    form = QuestionsBuilderForm(survey=survey, initial={'block': block.pk})
+    form.fields['block'].widget = forms.HiddenInput()
+    if request.method == 'POST':
+        data = request.POST.copy()
+        data['block'] = block.pk
+        try:
+            services.save_question(pk, request.user, data, request.POST.get('revision'))
+            messages.success(request, 'Вопрос сохранён. Можно добавить следующий или продолжить создание опроса.')
+            return redirect('surveys_builder:block_content', pk=pk, block_pk=block.pk)
+        except services.InvalidForm as error:
+            form = error.form
+            form.fields['block'].widget = forms.HiddenInput()
+        except ValidationError as error:
+            return failure(request, error, survey)
+    blocks = list(survey.blocks.prefetch_related('questions', 'text_sections'))
+    block_index = next(i for i, candidate in enumerate(blocks) if candidate.pk == block.pk)
+    empty_blocks = [candidate for candidate in blocks if not candidate.questions.all() and not candidate.text_sections.all()]
+    return page(request, 'block_content.html', survey, edited_block=block, form=form,
+                items=block_items(block, block.questions.prefetch_related('options')),
+                block_number=block_index + 1, block_count=len(blocks), empty_blocks=empty_blocks,
+                structure_ready=not empty_blocks, can_add_block=len(blocks) < 50,
+                next_block=blocks[block_index + 1] if block_index + 1 < len(blocks) else None)
+
+
+@staff_member_required
+@require_http_methods(['GET', 'POST'])
+def text_section_edit(request, pk, block_pk, section_pk=None):
+    survey = get_survey(pk)
+    block = get_object_or_404(survey.blocks, pk=block_pk)
+    section = get_object_or_404(block.text_sections, pk=section_pk) if section_pk else None
+    form = BlockTextSectionForm(instance=section)
+    if request.method == 'POST':
+        try:
+            services.save_text_section(pk, block_pk, request.user, request.POST, request.FILES,
+                                      request.POST.get('revision'), section_pk)
+            messages.success(request, 'Текстовая секция сохранена.')
+            return redirect('surveys_builder:block_content', pk=pk, block_pk=block_pk)
+        except services.InvalidForm as error:
+            form = error.form
+        except ValidationError as error:
+            return failure(request, error, survey)
+    return page(request, 'text_section_edit.html', survey, edited_block=block, text_section=section, form=form)
+
+
+@staff_member_required
+@require_POST
+def text_section_action(request, pk, block_pk, section_pk, action):
+    try:
+        services.text_section_action(pk, block_pk, section_pk, request.user, action, request.POST.get('revision'))
+    except ValidationError as error:
+        return failure(request, error, get_survey(pk))
+    return redirect('surveys_builder:block_content', pk=pk, block_pk=block_pk)
+
+
+@staff_member_required
+@require_http_methods(['GET', 'POST'])
+def block_templates(request):
+    form = QuestionBlockForm()
+    if request.method == 'POST':
+        try:
+            template = services.create_block_template(request.user, request.POST)
+            return redirect('surveys_builder:block_content', pk=template.pk, block_pk=template.blocks.get().pk)
+        except services.InvalidForm as error:
+            form = error.form
+    templates = SurveysBuilder.objects.filter(is_block_template=True).prefetch_related('blocks')
+    return page(request, 'block_templates.html', form=form, templates=templates)
+
+
+@staff_member_required
+@require_POST
+def save_block_template(request, pk, block_pk):
+    try:
+        services.create_block_template(request.user, {}, source_pk=pk, block_pk=block_pk, revision=request.POST.get('revision'))
+    except ValidationError as error:
+        return failure(request, error, get_survey(pk))
+    messages.success(request, 'Копия блока добавлена в шаблоны. Продолжайте создание опроса.')
+    return redirect('surveys_builder:block_content', pk=pk, block_pk=block_pk)
+
+
+@staff_member_required
+@require_http_methods(['GET', 'POST'])
+def import_block_template(request, pk):
+    survey = get_survey(pk)
+    if request.method == 'POST':
+        try:
+            try:
+                template_pk = int(request.POST.get('template_id', ''))
+            except (ValueError, TypeError):
+                raise ValidationError('Выберите черновик блока.')
+            block = services.import_block_template(pk, request.user, template_pk, request.POST.get('revision'))
+            messages.success(request, 'Готовый блок добавлен в опрос. При необходимости измените его или продолжите.')
+            return redirect('surveys_builder:block_content', pk=pk, block_pk=block.pk)
+        except ValidationError as error:
+            return failure(request, error, survey)
+    return page(request, 'import_block_template.html', survey,
+                templates=SurveysBuilder.objects.filter(is_block_template=True))
+
+
+@login_required
+@require_http_methods(['GET'])
+def section_image(request, section_pk):
+    section = get_object_or_404(BlockTextSection.objects.select_related('block__survey'), pk=section_pk)
+    if not request.user.is_active or not section.image:
+        raise Http404
+    if not request.user.is_staff:
+        assignment = SurveyAssignment.objects.filter(user=request.user, survey=section.block.survey).exclude(
+            survey__status=SurveysBuilder.Status.DRAFT).first()
+        if not assignment or section.block_id not in assignment.visible_block_ids:
+            raise Http404
+    try:
+        file = section.image.open('rb')
+    except FileNotFoundError:
+        raise Http404
+    response = FileResponse(file, content_type=mimetypes.guess_type(section.image.name)[0] or 'application/octet-stream')
+    response['Cache-Control'] = 'private, no-store'
+    response['X-Content-Type-Options'] = 'nosniff'
+    return response

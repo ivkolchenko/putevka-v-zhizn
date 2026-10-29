@@ -1,25 +1,23 @@
 from django import forms
+import uuid
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 
 from my_study.models import Course, School, Subject
 from scholar_form.models import UserInfo
 
-from .models import QuestionBlock, QuestionsBuilder, QuestionOptions, SurveysBuilder
+from .models import BlockTextSection, QuestionBlock, QuestionsBuilder, QuestionOptions, SurveysBuilder
 from .selectors import group_questions, student_name, student_queryset
 
 
 class SurveysBuilderForm(forms.ModelForm):
     class Meta:
         model = SurveysBuilder
-        fields = ['title', 'description', 'deadline']
-        widgets = {'deadline': forms.DateTimeInput(format='%Y-%m-%dT%H:%M', attrs={'type': 'datetime-local'})}
+        fields = ['title', 'description']
+        widgets = {'title': forms.TextInput(attrs={'placeholder': 'Например, «Обратная связь об учёбе»'}),
+                   'description': forms.Textarea(attrs={'rows': 3})}
+        labels = {'description': 'Описание (необязательно)'}
 
-    def clean_deadline(self):
-        deadline = self.cleaned_data['deadline']
-        if deadline and deadline <= timezone.now():
-            raise ValidationError('Срок ответа должен быть в будущем.')
-        return deadline
 
 
 class SurveyListFilterForm(forms.Form):
@@ -34,11 +32,14 @@ class QuestionBlockForm(forms.ModelForm):
     class Meta:
         model = QuestionBlock
         fields = ['title', 'description']
+        widgets = {'title': forms.TextInput(attrs={'placeholder': 'Например, «О себе» или «Об учёбе»'}),
+                   'description': forms.Textarea(attrs={'rows': 3})}
+        labels = {'description': 'Описание (необязательно)'}
 
 
 class QuestionsBuilderForm(forms.ModelForm):
     options_text = forms.CharField(
-        label='Варианты ответа', required=False, max_length=10000,
+        label='Варианты ответа', required=False, max_length=10049,
         widget=forms.Textarea(attrs={'rows': 5}),
         help_text='Для вопросов с выбором — от 2 до 50 вариантов, каждый с новой строки. Для остальных типов поле не используется.',
     )
@@ -52,7 +53,7 @@ class QuestionsBuilderForm(forms.ModelForm):
         if survey is None and self.instance.survey_id:
             survey = self.instance.survey
         self.fields['block'].queryset = survey.blocks.all() if survey else QuestionBlock.objects.none()
-        self.fields['block'].empty_label = 'Без блока'
+        self.fields['block'].empty_label = 'Выберите блок'
         if self.instance.pk:
             self.fields['options_text'].initial = '\n'.join(o.text for o in self.instance.options.all())
 
@@ -90,65 +91,113 @@ class StudentMultipleChoiceField(forms.ModelMultipleChoiceField):
         return f'{student_name(obj)} ({obj.get_username()})'
 
 
-class AudienceForm(forms.Form):
-    mode = forms.ChoiceField(label='Выбор получателей', choices=SurveysBuilder.AudienceMode.choices)
-    grades = forms.MultipleChoiceField(label=UserInfo._meta.get_field('next_year_class_digit').verbose_name, required=False,
-                                      choices=[(str(n), str(n)) for n in range(1, 12)])
-    profiles = forms.MultipleChoiceField(label='Учебные профили', choices=UserInfo.InternalStudyProfile.choices, required=False)
-    statuses = forms.MultipleChoiceField(label='Статус в программе (включая выпускников)', choices=UserInfo.STATUSES, required=False)
-    subjects = forms.ModelMultipleChoiceField(label='Предметы изучаемых курсов', queryset=Subject.objects.all(), required=False)
-    planned_exams = forms.ModelMultipleChoiceField(label='Планируемые экзамены', queryset=Subject.objects.all(), required=False)
-    schools = forms.ModelMultipleChoiceField(label='Учебные организации / школы курсов', queryset=School.objects.all(), required=False)
-    courses = forms.ModelMultipleChoiceField(label='Курсы', queryset=Course.objects.select_related('school', 'subject'), required=False)
-    steps = forms.MultipleChoiceField(label='Этапы отбора', choices=UserInfo.SelectionStep.choices, required=False)
-    form_statuses = forms.MultipleChoiceField(label='Статусы анкеты', choices=UserInfo.FormStatus.choices, required=False)
-    account_active = forms.ChoiceField(label='Активность учётной записи', required=False, initial='yes',
-                                     choices=[('', 'Любая'), ('yes', 'Активная'), ('no', 'Отключённая')],
-                                     help_text='Это доступ к входу на сайт, а не статус участия в программе.')
-    registration_complete = forms.ChoiceField(label='Регистрация завершена', required=False,
-                                              choices=[('', 'Не учитывать'), ('yes', 'Да'), ('no', 'Нет')])
-    region = forms.CharField(label='Регион (точное название)', required=False, max_length=1000)
-    q = forms.CharField(label='Поиск по имени, логину или email', required=False, max_length=200)
-    included_users = StudentMultipleChoiceField(label='Конкретные ученики / дополнительно включить', queryset=student_queryset(), required=False)
-    excluded_users = StudentMultipleChoiceField(label='Исключить учеников', queryset=student_queryset(), required=False)
-
-    FILTER_FIELDS = ('grades', 'profiles', 'statuses', 'subjects', 'planned_exams', 'schools', 'courses',
-                     'steps', 'form_statuses', 'account_active', 'registration_complete', 'region', 'q')
+class FilterForm(forms.Form):
+    FILTER_FIELDS = ()
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         for field in self.fields.values():
             if isinstance(field, (forms.MultipleChoiceField, forms.ModelMultipleChoiceField)):
                 field.widget = forms.CheckboxSelectMultiple(choices=field.choices)
-        # В индивидуальном режиме даже устаревшие ID фильтров не мешают выбору учеников.
-        if self.is_bound and self.data.get('mode') == SurveysBuilder.AudienceMode.INDIVIDUAL:
-            self.data = self.data.copy()
-            for name in self.FILTER_FIELDS:
-                self.data.pop(name, None)
-
-    @classmethod
-    def empty_data(cls):
-        """Явно пустая настройка, включая ограничение активности аккаунта."""
-        return {'mode': SurveysBuilder.AudienceMode.FILTERS, 'account_active': ''}
-
-    @classmethod
-    def saved_data(cls, survey):
-        return {**survey.audience_filters, 'mode': survey.audience_mode,
-                'included_users': list(survey.included_users.values_list('pk', flat=True)),
-                'excluded_users': list(survey.excluded_users.values_list('pk', flat=True))}
-
-    def clean(self):
-        data = super().clean()
-        if data.get('mode') == 'individual' and not data.get('included_users'):
-            self.add_error('included_users', 'Выберите хотя бы одного ученика.')
-        return data
 
     def serialized_filters(self):
         result = {}
         for key in self.FILTER_FIELDS:
             value = self.cleaned_data[key]
             result[key] = list(value.values_list('pk', flat=True)) if hasattr(value, 'values_list') else value
+        active = self.data.getlist('active_filters') if hasattr(self.data, 'getlist') else self.data.get('active_filters', [])
+        result['_active_filters'] = [key for key in self.FILTER_FIELDS if result[key] or key in active]
         return result
+
+    @property
+    def filter_groups(self):
+        active = self.data.getlist('active_filters') if hasattr(self.data, 'getlist') else self.data.get('active_filters', [])
+        if not self.is_bound:
+            active = self.initial.get('active_filters', self.initial.get('_active_filters', []))
+        return [{'name': name, 'field': self[name], 'active': bool(self[name].value()) or name in active or name in self.initial.get('_active_filters', [])}
+                for name in self.FILTER_FIELDS]
+
+
+class BlockVisibilityForm(FilterForm):
+    grades = forms.MultipleChoiceField(label='Классы', choices=[('10', '10 класс'), ('11', '11 класс')], required=False)
+    profiles = forms.MultipleChoiceField(label='Учебные профили', choices=UserInfo.InternalStudyProfile.choices, required=False)
+    statuses = forms.MultipleChoiceField(label='Статус участия', choices=UserInfo.STATUSES, required=False)
+    subjects = forms.ModelMultipleChoiceField(label='Предметы изучаемых курсов', queryset=Subject.objects.all(), required=False)
+    planned_exams = forms.ModelMultipleChoiceField(label='Планируемые экзамены', queryset=Subject.objects.all(), required=False)
+    schools = forms.ModelMultipleChoiceField(label='Учебные организации / школы курсов', queryset=School.objects.all(), required=False)
+    courses = forms.ModelMultipleChoiceField(label='Курсы', queryset=Course.objects.select_related('school', 'subject'), required=False)
+    steps = forms.MultipleChoiceField(label='Этапы отбора', choices=UserInfo.SelectionStep.choices, required=False)
+    FILTER_FIELDS = ('grades', 'profiles', 'statuses', 'subjects', 'planned_exams', 'schools', 'courses', 'steps')
+    active_filters = forms.MultipleChoiceField(required=False, choices=[(key, key) for key in FILTER_FIELDS], widget=forms.MultipleHiddenInput)
+
+
+class AudienceForm(BlockVisibilityForm):
+    mode = forms.ChoiceField(label='Способ назначения', choices=SurveysBuilder.AudienceMode.choices, widget=forms.RadioSelect)
+    included_users = StudentMultipleChoiceField(label='Участники', queryset=student_queryset(), required=False)
+    deadline = forms.DateTimeField(label='Принимать ответы до (необязательно)', required=False,
+        widget=forms.DateTimeInput(format='%Y-%m-%dT%H:%M', attrs={'type': 'datetime-local'}))
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.is_bound and self.data.get('mode') == 'individual':
+            self.data = self.data.copy()
+            for name in (*self.FILTER_FIELDS, 'active_filters'):
+                self.data.pop(name, None)
+
+    @classmethod
+    def empty_data(cls):
+        return {'mode': 'filters'}
+
+    @classmethod
+    def saved_data(cls, survey):
+        return {**{key: value for key, value in survey.audience_filters.items() if key in cls.FILTER_FIELDS},
+                'active_filters': survey.audience_filters.get('_active_filters', []),
+                'mode': survey.audience_mode, 'deadline': survey.deadline,
+                'included_users': list(survey.included_users.values_list('pk', flat=True)) if survey.audience_mode == 'individual' else []}
+
+    def clean_deadline(self):
+        deadline = self.cleaned_data['deadline']
+        if deadline and deadline <= timezone.now():
+            raise ValidationError('Срок ответа должен быть в будущем.')
+        return deadline
+
+    def clean(self):
+        data = super().clean()
+        if data.get('mode') == 'individual' and not data.get('included_users'):
+            self.add_error('included_users', 'Выберите хотя бы одного участника.')
+        if data.get('mode') == 'filters' and data.get('included_users'):
+            self.add_error('included_users', 'Выберите один способ: фильтры или конкретные участники.')
+        return data
+
+
+class BlockTextSectionForm(forms.ModelForm):
+    remove_image = forms.BooleanField(label='Убрать текущую картинку', required=False)
+
+    class Meta:
+        model = BlockTextSection
+        fields = ['title', 'text', 'image', 'image_alt', 'remove_image']
+        widgets = {'image': forms.FileInput(attrs={'accept': 'image/png,image/jpeg,image/gif,image/webp'})}
+
+    def clean_image(self):
+        image = self.cleaned_data.get('image')
+        if image and hasattr(image, 'image'):
+            if image.size > 5 * 1024 * 1024 or image.image.width > 6000 or image.image.height > 6000:
+                raise ValidationError('Картинка должна быть до 5 МБ и до 6000 пикселей по каждой стороне.')
+            if image.image.format not in ('JPEG', 'PNG', 'GIF', 'WEBP'):
+                raise ValidationError('Поддерживаются PNG, JPEG, GIF и WebP.')
+            extension = 'jpg' if image.image.format == 'JPEG' else image.image.format.lower()
+            image.name = f'{uuid.uuid4().hex}.{extension}'
+        return image
+
+    def clean(self):
+        data = super().clean()
+        if data.get('remove_image'):
+            if self.files.get('image'):
+                self.add_error('remove_image', 'Выберите замену картинки или удаление, не одновременно.')
+            data['image'] = False
+        if not data.get('text', '').strip() and not data.get('image'):
+            raise ValidationError('Добавьте текст или картинку.')
+        return data
 
 
 class ResponseForm(forms.Form):
@@ -187,8 +236,10 @@ class ResponseForm(forms.Form):
         if blocks is None:
             blocks = sorted({q.block_id: q.block for q in self.questions if q.block_id}.values(),
                             key=lambda b: (b.position, b.pk))
-        return [{'block': section['block'],
-                 'fields': [self[f'q_{q.pk}'] for q in section['questions']]}
+        return [{'block': section['block'], 'fields': [self[f'q_{q.pk}'] for q in section['questions']],
+                 'items': [{'type': item['type'], 'section': item.get('section'),
+                            'field': self[f"q_{item['question'].pk}"] if item['type'] == 'question' else None}
+                           for item in section['items']]}
                 for section in group_questions(self.questions, blocks)]
 
     def clean(self):

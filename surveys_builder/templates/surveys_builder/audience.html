@@ -1,34 +1,16 @@
 {% extends 'surveys_builder/base.html' %}
 {% block content %}
-<h1>1. Получатели: {{ survey.title }}</h1>
-<p>Между группами фильтров действует «И», внутри каждой группы — «ИЛИ». Пустой фильтр не ограничивает выборку.
-Школа, предмет и курс проверяются для одного выбранного курса ученика.</p>
-<p>В режиме «Конкретные ученики» фильтры не применяются. В режиме фильтров выбранные вручную ученики добавляются к выборке независимо от фильтров. Исключения действуют в обоих режимах.</p>
-{% if survey.is_draft %}
-<form method="post">{% csrf_token %}{% include 'surveys_builder/_revision.html' %}
-<button type="submit" name="action" value="preview" hidden>Проверить получателей</button>
-{{ form.non_field_errors }}
-{% for field in form %}
-<fieldset class="audience-field">
-    <legend>{{ field.label }}</legend>
-    {{ field.errors }}
-    <div class="audience-input">{{ field }}</div>
-    {% if field.help_text %}<p><small>{{ field.help_text }}</small></p>{% endif %}
-    {% if field.name != 'mode' %}
-    <button type="submit" name="clear_field" value="{{ field.name }}" formnovalidate>Снять выбор: {{ field.label }}</button>
-    {% endif %}
-</fieldset>
-{% endfor %}
-<p>Значения можно снять отдельными флажками. Сброс и снятие выбора показывают новую выборку;
-для сохранения изменений нажмите «Сохранить и перейти к вопросам».</p>
-<button type="submit" name="action" value="reset" formnovalidate>Сбросить все фильтры и списки</button>
-<button type="submit" name="action" value="preview">Проверить получателей</button>
-<button type="submit" name="action" value="save">Сохранить и перейти к вопросам</button>
+<div class="page-heading"><p class="step-label">Шаг 3 из 4</p><h1>Кому отправить опрос?</h1><p>Выберите участников. Срок можно не указывать.</p></div>
+<p>Опросы назначаются только активным пользователям с завершённой регистрацией.</p>
+{% if survey.is_draft and not survey.is_block_template %}
+<form method="post" class="editor-form" data-assignment-form>{% csrf_token %}{% include 'surveys_builder/_revision.html' %}
+{{ form.non_field_errors }}{{ form.mode.errors }}<fieldset><legend>{{ form.mode.label }}</legend>{{ form.mode }}</fieldset>
+<div data-filter-mode>{% include 'surveys_builder/_filter_picker.html' with filter_form=form %}</div>
+<div data-individual-mode><h2>Конкретные участники</h2>{{ form.included_users.errors }}<div class="participant-picker">{{ form.included_users }}</div></div>
+<h2>Срок сдачи (необязательно)</h2><p>Оставьте поле пустым, чтобы принимать ответы без ограничения по времени.</p>
+{{ form.deadline.errors }}{{ form.deadline.label_tag }}{{ form.deadline }}
+<button class="secondary" type="submit" name="action" value="preview">Проверить получателей</button><div class="form-footer"><a href="{% url 'surveys_builder:survey_detail' survey.pk %}">← Блоки опроса</a><button type="submit" name="action" value="save">Далее: проверить и опубликовать →</button></div>
 </form>
-{% else %}<p>Получатели уже зафиксированы при публикации. Их список находится в результатах.</p>{% endif %}
-{% if recipient_count != None %}
-<h2>Найдено получателей: {{ recipient_count }}</h2>
-<p>Здесь показаны первые 50. Полный список можно проверить перед публикацией.</p>
-<ul>{% for id, name, username in recipients %}<li>{{ name }} ({{ username }})</li>{% empty %}<li>Никто не подходит под условия.</li>{% endfor %}</ul>
-{% endif %}
+{% else %}<p>Назначение доступно только для черновика опроса.</p>{% endif %}
+{% if recipient_count != None %}<h2>Получателей: {{ recipient_count }}</h2><p>Показаны первые 50 участников.</p><ul>{% for id, name, username in recipients %}<li>{{ name }} ({{ username }})</li>{% empty %}<li>По этим условиям участников нет.</li>{% endfor %}</ul>{% endif %}
 {% endblock %}

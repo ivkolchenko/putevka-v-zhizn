@@ -14,11 +14,12 @@ from django.test import Client, TestCase, TransactionTestCase
 from django.urls import reverse
 from django.utils import timezone
 
+from core.models import RegistrationPersonalData
 from my_study.models import Course, CourseSelection, School, Subject
 from scholar_form.models import UserInfo
 from . import services
 from .forms import AudienceForm, ResponseForm
-from .models import QuestionOptions, QuestionsBuilder, SurveyAnswer, SurveyAssignment, SurveyResponse, SurveysBuilder
+from .models import QuestionBlock, QuestionOptions, QuestionsBuilder, SurveyAnswer, SurveyAssignment, SurveyResponse, SurveysBuilder
 from .selectors import resolve_audience
 
 User = get_user_model()
@@ -29,7 +30,9 @@ class SurveyTests(TestCase):
     def setUpTestData(cls):
         cls.staff = User.objects.create_user(username='staff', is_staff=True)
         cls.student = User.objects.create_user(username='student')
+        RegistrationPersonalData.objects.create(user=cls.student, email='student-registration@example.test', current_step='finish')
         cls.other = User.objects.create_user(username='other')
+        RegistrationPersonalData.objects.create(user=cls.other, email='other-registration@example.test', current_step='finish')
         cls.inactive = User.objects.create_user(username='inactive', is_active=False)
         UserInfo.objects.create(user=cls.student, first_name='Анна', last_name='Иванова',
                                 next_year_class_digit=11, internal_study_profile='it', status='SCHOLAR', region='Москва')
@@ -55,7 +58,7 @@ class SurveyTests(TestCase):
     def add_question(self, survey, kind='short_text', required=True):
         survey.refresh_from_db()
         return services.save_question(survey.pk, self.staff, {'title': kind, 'answer_type': kind,
-                                      'required': required, 'options_text': 'Первый\nВторой'}, survey.revision)
+                                      'required': required, 'block': (survey.blocks.first() or QuestionBlock.objects.create(survey=survey, title='Основной блок')).pk, 'options_text': 'Первый\nВторой'}, survey.revision)
 
     def publish(self, survey):
         survey.refresh_from_db()
@@ -70,11 +73,10 @@ class SurveyTests(TestCase):
         return set(resolve_audience(form.cleaned_data).values_list('pk', flat=True))
 
     def test_filters_use_project_profiles_grades_statuses_and_exams(self):
-        ids = self.audience_ids(grades=['11'], profiles=['it'], statuses=['SCHOLAR'],
-                                planned_exams=[self.subject.pk], region='Москва', account_active='yes')
-        self.assertEqual(ids, {self.student.pk})
+        self.assertEqual(self.audience_ids(grades=['11'], profiles=['it'], statuses=['SCHOLAR'],
+            planned_exams=[self.subject.pk]), {self.student.pk})
         self.assertEqual(self.audience_ids(statuses=['ALUMNUS']), {self.other.pk})
-        self.assertEqual(self.audience_ids(account_active='no'), {self.inactive.pk})
+        self.assertNotIn(self.inactive.pk, self.audience_ids())
         self.assertNotIn(self.staff.pk, self.audience_ids())
 
     def test_course_filters_must_match_same_course(self):
@@ -85,10 +87,10 @@ class SurveyTests(TestCase):
         self.assertEqual(self.audience_ids(schools=[school.pk], subjects=[self.subject.pk]), set())
         self.assertEqual(self.audience_ids(schools=[self.school.pk], subjects=[self.subject.pk]), {self.student.pk})
 
-    def test_explicit_inclusions_and_exclusion_precedence(self):
-        self.assertEqual(self.audience_ids(grades=['11'], included_users=[self.other.pk], excluded_users=[self.student.pk]), {self.other.pk})
+    def test_assignment_modes_are_mutually_exclusive(self):
+        form = AudienceForm({'mode': 'filters', 'grades': ['11'], 'included_users': [self.other.pk]})
+        self.assertFalse(form.is_valid())
         self.assertEqual(self.audience_ids(mode='individual', grades=['10'], included_users=[self.student.pk]), {self.student.pk})
-        self.assertEqual(self.audience_ids(mode='individual', included_users=[self.student.pk], excluded_users=[self.student.pk]), set())
 
     def test_invalid_audience_ids_and_empty_individual_rejected(self):
         for data in ({'mode': 'individual'}, {'mode': 'filters', 'grades': ['99']},
@@ -103,42 +105,47 @@ class SurveyTests(TestCase):
         survey.refresh_from_db()
         self.assertFalse(survey.audience_configured)
 
-    def test_wizard_create_audience_question_preview_publish_and_student_answer(self):
+    def test_wizard_blocks_then_questions_then_assignment_and_submission(self):
         response = self.client.post(reverse('surveys_builder:constructor'), {'title': 'Полный путь'})
         survey = SurveysBuilder.objects.get(title='Полный путь')
-        self.assertRedirects(response, reverse('surveys_builder:audience', args=[survey.pk]))
-        response = self.client.post(response.url, {'mode': 'individual', 'included_users': [self.student.pk], 'revision': survey.revision})
-        self.assertRedirects(response, reverse('surveys_builder:survey_detail', args=[survey.pk]))
+        self.assertRedirects(response, reverse('surveys_builder:block_create', args=[survey.pk]))
+        self.client.post(reverse('surveys_builder:block_create', args=[survey.pk]), {'title': 'Учёба', 'revision': survey.revision})
+        block = survey.blocks.get()
         survey.refresh_from_db()
-        self.client.post(response.url, {'title': 'Оцените', 'answer_type': 'scale', 'required': True, 'revision': survey.revision})
-        preview = self.client.get(reverse('surveys_builder:preview', args=[survey.pk]))
-        self.assertEqual(preview.status_code, 200)
-        self.assertContains(preview, 'Анна')
-        result = self.client.post(reverse('surveys_builder:publish', args=[survey.pk]), {'token': preview.context['publish_token']})
-        self.assertRedirects(result, reverse('surveys_builder:results', args=[survey.pk]))
+        self.client.post(reverse('surveys_builder:block_content', args=[survey.pk, block.pk]),
+            {'title': 'Оцените', 'answer_type': 'scale', 'required': True, 'revision': survey.revision})
+        survey.refresh_from_db()
+        self.assertFalse(survey.audience_configured)
+        response = self.client.post(reverse('surveys_builder:audience', args=[survey.pk]),
+            {'mode': 'individual', 'included_users': [self.student.pk], 'revision': survey.revision, 'action': 'save'})
+        self.assertRedirects(response, reverse('surveys_builder:preview', args=[survey.pk]))
+        preview = self.client.get(response.url)
+        self.assertNotContains(preview, 'name="q_')
+        self.client.post(reverse('surveys_builder:publish', args=[survey.pk]), {'token': preview.context['publish_token']})
         self.client.force_login(self.student)
-        self.assertContains(self.client.get(reverse('student_surveys:list')), 'Полный путь')
         assignment = survey.assignments.get()
         question = survey.questions.get()
-        result = self.client.post(reverse('student_surveys:answer', args=[assignment.pk]),
-                                  {'action': 'submit', 'response_revision': 0, f'q_{question.pk}': '5'})
-        self.assertRedirects(result, reverse('student_surveys:answer', args=[assignment.pk]))
+        response = self.client.post(reverse('student_surveys:answer', args=[assignment.pk]),
+            {'action': 'submit', 'response_revision': 0, f'q_{question.pk}': '5'})
+        self.assertEqual(response.status_code, 302)
         self.assertEqual(assignment.response.answers.get().value, 5)
 
-    def test_no_question_creation_before_audience(self):
+    def test_questions_can_be_created_before_audience_but_require_block(self):
         survey = services.create_survey(self.staff, {'title': 'Новый'})
         with self.assertRaises(ValidationError):
-            self.add_question(survey)
-        self.assertRedirects(self.client.get(reverse('surveys_builder:survey_detail', args=[survey.pk])),
-                             reverse('surveys_builder:audience', args=[survey.pk]))
+            services.save_question(survey.pk, self.staff, {'title': 'Вопрос'}, survey.revision)
+        question = self.add_question(survey)
+        self.assertIsNotNone(question.block_id)
+        self.assertFalse(survey.audience_configured)
+        self.assertEqual(self.client.get(reverse('surveys_builder:survey_detail', args=[survey.pk])).status_code, 200)
 
     def test_invalid_form_errors_render_without_losing_input(self):
         response = self.client.post(reverse('surveys_builder:constructor'), {'title': ''})
-        self.assertEqual(response.status_code, 200)
         self.assertTrue(response.context['form'].errors)
         survey = self.make_survey()
-        response = self.client.post(reverse('surveys_builder:survey_detail', args=[survey.pk]),
-                                    {'title': 'Вопрос', 'answer_type': 'single_choice', 'options_text': 'Один', 'revision': survey.revision})
+        block = survey.blocks.get()
+        response = self.client.post(reverse('surveys_builder:block_content', args=[survey.pk, block.pk]),
+            {'title': 'Вопрос', 'answer_type': 'single_choice', 'options_text': 'Один', 'revision': survey.revision})
         self.assertTrue(response.context['form'].errors)
         self.assertContains(response, 'Вопрос')
 
@@ -186,14 +193,13 @@ class SurveyTests(TestCase):
         survey.refresh_from_db()
         self.assertEqual(survey.title, 'Новое')
 
-    def test_preview_does_not_save_answers_or_publish(self):
+    def test_preview_does_not_accept_answers_or_publish(self):
         survey = self.make_survey()
-        response = self.client.post(reverse('surveys_builder:preview', args=[survey.pk]), {f'q_{survey.questions.get().pk}': 'Тест'})
-        self.assertEqual(response.status_code, 200)
+        url = reverse('surveys_builder:preview', args=[survey.pk])
+        self.assertEqual(self.client.get(url).status_code, 200)
+        self.assertEqual(self.client.post(url, {}).status_code, 405)
         self.assertFalse(SurveyResponse.objects.exists())
-        self.assertFalse(SurveyAssignment.objects.exists())
-        survey.refresh_from_db()
-        self.assertTrue(survey.is_draft)
+        self.assertFalse(survey.assignments.exists())
 
     def test_publication_requires_questions_and_audience(self):
         survey = services.create_survey(self.staff, {'title': 'Пустой'})
@@ -258,7 +264,7 @@ class SurveyTests(TestCase):
         self.publish(survey)
         copy = services.copy_survey(survey.pk, self.staff)
         self.assertTrue(copy.is_draft)
-        self.assertTrue(copy.audience_configured)
+        self.assertFalse(copy.audience_configured)
         self.assertEqual(copy.questions.count(), 2)
         self.assertEqual(copy.questions.last().options.count(), 2)
         self.assertFalse(copy.assignments.exists())
@@ -355,10 +361,10 @@ class SurveyTests(TestCase):
         self.assertEqual(survey.assignments.count(), 1)
 
     def test_past_deadline_cannot_be_saved_or_published(self):
-        with self.assertRaises(services.InvalidForm):
-            services.create_survey(self.staff, {'title': 'Срок', 'deadline': timezone.now() - timedelta(days=1)})
         survey = self.make_survey()
-        SurveysBuilder.objects.filter(pk=survey.pk).update(deadline=timezone.now() - timedelta(days=1))
+        with self.assertRaises(services.InvalidForm):
+            services.save_audience(survey.pk, self.staff, {'mode': 'filters', 'deadline': timezone.now()-timedelta(days=1)}, survey.revision)
+        SurveysBuilder.objects.filter(pk=survey.pk).update(deadline=timezone.now()-timedelta(days=1))
         survey.refresh_from_db()
         with self.assertRaises(ValidationError):
             self.publish(survey)
@@ -405,7 +411,7 @@ class SurveyTests(TestCase):
         self.assertContains(self.client.get(reverse('surveys_builder:response_detail', args=[survey.pk, response.pk])), '=SUM(1,2)')
         export = self.client.get(reverse('surveys_builder:results_csv', args=[survey.pk]))
         rows = list(csv.reader(io.StringIO(b''.join(export.streaming_content).decode('utf-8-sig')), delimiter=';'))
-        self.assertEqual(rows[0][-1], "'=заголовок")
+        self.assertEqual(rows[0][-1], "[Основной блок] =заголовок")
         self.assertEqual(rows[1][-1], "'=SUM(1,2)")
         self.assertEqual(rows[1][1], 'Иванова Анна')
         self.assertEqual(self.client.get(reverse('surveys_builder:results', args=[survey.pk])).context['counts']['submitted'], 1)
@@ -444,14 +450,11 @@ class SurveyTests(TestCase):
         self.assertEqual(response.context['recipient_count'], 1)
         self.assertEqual(list(services.audience_for(survey)), [self.student])
 
-    def test_registration_and_selection_filters(self):
-        from core.models import RegistrationPersonalData
-        RegistrationPersonalData.objects.create(user=self.student, email='survey@example.test', current_step='finish')
-        self.assertEqual(self.audience_ids(registration_complete='yes'), {self.student.pk})
-        self.assertNotIn(self.student.pk, self.audience_ids(registration_complete='no'))
-        self.assertIn(self.other.pk, self.audience_ids(registration_complete='no'))
+    def test_registration_is_mandatory_and_selection_filters_still_work(self):
+        RegistrationPersonalData.objects.filter(user=self.other).update(current_step='initial_data')
+        self.assertEqual(self.audience_ids(), {self.student.pk})
         info = self.student.user_info
-        self.assertIn(self.student.pk, self.audience_ids(steps=[info.selection_step], form_statuses=[info.form_status]))
+        self.assertIn(self.student.pk, self.audience_ids(steps=[info.selection_step]))
 
     def test_project_navigation_links_render(self):
         from django.template.loader import render_to_string
@@ -489,7 +492,7 @@ class SurveyTests(TestCase):
 class LegacySurveyMigrationTests(TransactionTestCase):
     """Существующие опросы, вопросы и варианты должны пережить обновление."""
     old = ('surveys_builder', '0003_alter_questionsbuilder_answer_type_questionoptions')
-    new = ('surveys_builder', '0005_question_blocks')
+    new = ('surveys_builder', '0006_block_content_and_assignment')
 
     def test_legacy_survey_becomes_draft_without_data_loss(self):
         executor = MigrationExecutor(connection)

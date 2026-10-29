@@ -5,7 +5,7 @@ from django.test import Client, TestCase
 from django.urls import reverse
 
 from . import services
-from .models import QuestionOptions, QuestionsBuilder, SurveyAnswer, SurveyAssignment, SurveyResponse, SurveysBuilder
+from .models import QuestionBlock, QuestionOptions, QuestionsBuilder, SurveyAnswer, SurveyAssignment, SurveyResponse, SurveysBuilder
 
 
 class SurveyDeletionTests(TestCase):
@@ -15,7 +15,7 @@ class SurveyDeletionTests(TestCase):
         cls.staff = User.objects.create_user(username='delete-staff', is_staff=True)
         cls.student = User.objects.create_user(username='delete-student')
         cls.survey = SurveysBuilder.objects.create(title='Удаляемый опрос', status=SurveysBuilder.Status.PUBLISHED)
-        cls.question = QuestionsBuilder.objects.create(survey=cls.survey, title='Вопрос', answer_type='single_choice')
+        cls.question = QuestionsBuilder.objects.create(survey=cls.survey, block=QuestionBlock.objects.create(survey=cls.survey, title='Основной блок'), title='Вопрос', answer_type='single_choice')
         cls.option = QuestionOptions.objects.create(question=cls.question, text='Ответ')
         cls.assignment = SurveyAssignment.objects.create(survey=cls.survey, user=cls.student)
         cls.response = SurveyResponse.objects.create(assignment=cls.assignment, status=SurveyResponse.Status.SUBMITTED)

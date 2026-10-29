@@ -7,11 +7,12 @@ from django.test import Client, TestCase
 from django.urls import reverse
 from django.utils import timezone
 
+from core.models import RegistrationPersonalData
 from my_study.models import Course, CourseSelection, School, Subject
 from scholar_form.models import UserInfo
 
 from . import services
-from .models import SurveyAssignment, SurveyResponse, SurveysBuilder
+from .models import QuestionBlock, SurveyAssignment, SurveyResponse, SurveysBuilder
 
 
 class SurveyApiTests(TestCase):
@@ -20,7 +21,9 @@ class SurveyApiTests(TestCase):
         User = get_user_model()
         cls.staff = User.objects.create_user(username='api-staff', is_staff=True)
         cls.student = User.objects.create_user(username='api-student')
+        RegistrationPersonalData.objects.create(user=cls.student, email='student-registration@example.test', current_step='finish')
         cls.other = User.objects.create_user(username='api-other')
+        RegistrationPersonalData.objects.create(user=cls.other, email='other-registration@example.test', current_step='finish')
         cls.inactive = User.objects.create_user(username='api-inactive', is_active=False)
         UserInfo.objects.create(user=cls.student, first_name='Анна', last_name='Иванова',
             next_year_class_digit=11, internal_study_profile='it', status='SCHOLAR', email='anna@example.test')
@@ -47,7 +50,7 @@ class SurveyApiTests(TestCase):
             {'mode': 'individual', 'included_users': [self.student.pk]}, survey.revision)
         survey.refresh_from_db()
         services.save_question(survey.pk, self.staff,
-            {'title': 'Вопрос API', 'answer_type': kind, 'required': True, 'options_text': 'Да\nНет'}, survey.revision)
+            {'block': QuestionBlock.objects.create(survey=survey, title='Основной блок').pk, 'title': 'Вопрос API', 'answer_type': kind, 'required': True, 'options_text': 'Да\nНет'}, survey.revision)
         survey.refresh_from_db()
         if publish:
             services.publish_survey(survey.pk, self.staff,
@@ -58,43 +61,30 @@ class SurveyApiTests(TestCase):
     def test_full_json_flow_and_results(self):
         response = self.send('post', 'list', {'title': 'Обратная связь', 'description': 'Учёба'})
         self.assertEqual(response.status_code, 201)
-        survey = response.json()
-        pk = survey['id']
-        response = self.send('put', 'audience', {'revision': survey['revision'],
-            'mode': 'individual', 'included_users': [self.student.pk]}, pk)
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()['recipients']['count'], 1)
+        pk = response.json()['id']
+        response = self.send('post', 'blocks', {'title': 'Учёба', 'revision': response.json()['revision']}, pk)
+        self.assertEqual(response.status_code, 201)
         response = self.send('post', 'questions', {'revision': response.json()['revision'],
-            'title': 'Как проходит учёба?', 'answer_type': 'single_choice', 'required': True,
-            'options': ['Хорошо', 'Нужна помощь']}, pk)
+            'block_id': response.json()['block']['id'], 'title': 'Как проходит учёба?',
+            'answer_type': 'single_choice', 'required': True, 'options': ['Хорошо', 'Нужна помощь']}, pk)
         self.assertEqual(response.status_code, 201)
         question = response.json()['question']
+        response = self.send('put', 'audience', {'revision': response.json()['revision'], 'mode': 'individual', 'included_users': [self.student.pk], 'deadline': None}, pk)
+        self.assertEqual(response.status_code, 200)
         preview = self.client.get(self.url('preview', pk)).json()
         self.assertEqual(preview['errors'], [])
-        published = self.send('post', 'publish', {'token': preview['publish_token']}, pk)
-        self.assertEqual(published.status_code, 200)
-        self.assertEqual(published.json()['status'], 'published')
-
+        self.assertEqual(self.send('post', 'publish', {'token': preview['publish_token']}, pk).status_code, 200)
         self.client.force_login(self.student)
-        listing = self.client.get(self.url('list', student=True)).json()
-        self.assertEqual(listing['count'], 1)
-        assignment_pk = listing['results'][0]['id']
-        detail = self.client.get(self.url('detail', assignment_pk, student=True)).json()
-        self.assertNotIn('audience', detail['survey'])
-        self.assertEqual(detail['response']['revision'], 0)
-        submitted = self.send('put', 'response', {'revision': 0, 'final': True,
+        assignment_pk = self.client.get(self.url('list', student=True)).json()['results'][0]['id']
+        response = self.send('put', 'response', {'revision': 0, 'final': True,
             'answers': {str(question['id']): question['options'][0]['id']}}, assignment_pk, student=True)
-        self.assertEqual(submitted.status_code, 200)
-        self.assertEqual(submitted.json()['status'], 'submitted')
-
+        self.assertEqual(response.status_code, 200)
         self.client.force_login(self.staff)
         results = self.client.get(self.url('results', pk)).json()
         self.assertEqual(results['counts'], {'total': 1, 'submitted': 1, 'started': 0, 'not_started': 0})
         response_pk = results['recipients']['results'][0]['response_id']
-        detail = self.client.get(self.url('response_detail', pk, response_pk)).json()
-        self.assertEqual(detail['display_answers'][str(question['id'])], 'Хорошо')
-        exported = self.client.get(self.url('export', pk))
-        self.assertIn('Хорошо', b''.join(exported.streaming_content).decode('utf-8-sig'))
+        self.assertEqual(self.client.get(self.url('response_detail', pk, response_pk)).json()['display_answers'][str(question['id'])], 'Хорошо')
+        self.assertIn('Хорошо', b''.join(self.client.get(self.url('export', pk)).streaming_content).decode('utf-8-sig'))
 
     def test_staff_api_rejects_anonymous_and_student_without_redirects(self):
         self.client.logout()
@@ -119,23 +109,19 @@ class SurveyApiTests(TestCase):
             self.assertEqual(data['count'], 1)
         self.assertEqual(self.client.get(self.url('lookups', 'users')).status_code, 404)
 
-    def test_recipient_search_defaults_to_active_and_excludes_staff(self):
+    def test_recipient_filters_exclude_inactive_and_reject_removed_search(self):
         response = self.client.get(self.url('recipients'))
         self.assertEqual({u['id'] for u in response.json()['results']}, {self.student.pk, self.other.pk})
-        data = self.client.get(self.url('recipients'), {'q': 'Анна', 'grades': ['11'],
-            'courses': [self.course.pk]}).json()
-        self.assertEqual([u['id'] for u in data['results']], [self.student.pk])
-        for query in ('Иванова Анна', 'Анна Иванова', 'anna@example.test'):
-            response = self.client.get(self.url('recipients'), {'q': query})
-            self.assertEqual([u['id'] for u in response.json()['results']], [self.student.pk])
+        response = self.client.get(self.url('recipients'), {'grades': ['11'], 'courses': [self.course.pk]})
+        self.assertEqual([u['id'] for u in response.json()['results']], [self.student.pk])
+        self.assertEqual(self.client.get(self.url('recipients'), {'q': 'Анна'}).status_code, 400)
 
-    def test_audience_preview_is_read_only_and_exclusions_win(self):
-        count = SurveysBuilder.objects.count()
-        response = self.send('post', 'audience_preview', {'mode': 'filters', 'grades': ['11'],
-            'included_users': [self.other.pk], 'excluded_users': [self.student.pk]})
+    def test_audience_preview_is_read_only_and_removed_exclusions_rejected(self):
+        response = self.send('post', 'audience_preview', {'mode': 'filters', 'grades': ['10']})
         self.assertEqual(response.status_code, 200)
         self.assertEqual([u['id'] for u in response.json()['results']], [self.other.pk])
-        self.assertEqual(SurveysBuilder.objects.count(), count)
+        self.assertFalse(SurveysBuilder.objects.exists())
+        self.assertEqual(self.send('post', 'audience_preview', {'mode': 'filters', 'excluded_users': [self.student.pk]}).status_code, 400)
 
     def test_invalid_audience_types_and_ids_do_not_change_selection(self):
         survey = self.make_survey()

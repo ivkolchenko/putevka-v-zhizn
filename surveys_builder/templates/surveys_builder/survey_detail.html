@@ -1,32 +1,6 @@
-{% extends 'surveys_builder/base.html' %}
-{% block content %}
-<h1>2. Вопросы: {{ survey.title }}</h1>
-{{ survey.description|linebreaks }}
-{% if survey.is_draft %}<p><a href="{% url 'surveys_builder:block_create' survey.pk %}">Добавить блок вопросов</a></p>{% endif %}
-{% for section in sections %}
-<section class="question-block">
-{% if section.block %}
-<h2>{{ section.block.title }}</h2>
-{{ section.block.description|linebreaks }}
-{% if survey.is_draft %}
-<p><a href="{% url 'surveys_builder:block_edit' survey.pk section.block.pk %}">Изменить блок</a> ·
-<a href="{% url 'surveys_builder:block_delete' survey.pk section.block.pk %}">Удалить блок (вопросы сохранятся)</a> ·
-<a href="?block={{ section.block.pk }}#add-question">Добавить вопрос в блок</a></p>
-<div class="block-actions">
-<form method="post" action="{% url 'surveys_builder:block_action' survey.pk section.block.pk 'up' %}">{% csrf_token %}{% include 'surveys_builder/_revision.html' %}<button type="submit">Блок выше</button></form>
-<form method="post" action="{% url 'surveys_builder:block_action' survey.pk section.block.pk 'down' %}">{% csrf_token %}{% include 'surveys_builder/_revision.html' %}<button type="submit">Блок ниже</button></form>
-</div>
-{% endif %}
-{% else %}<h2>Вопросы без блока</h2>{% endif %}
-<ol>{% for question in section.questions %}
-    <li>{% include 'surveys_builder/_question_card.html' %}</li>
-{% empty %}<li>В блоке пока нет вопросов.</li>{% endfor %}</ol>
-</section>
-{% empty %}<p>Добавьте первый вопрос или создайте блок вопросов.</p>{% endfor %}
-{% if survey.is_draft %}
-<h2 id="add-question">Добавить вопрос</h2>
-<form method="post">{% csrf_token %}{% include 'surveys_builder/_revision.html' %}{{ form.as_p }}<button type="submit">Добавить</button></form>
-<p><a href="{% url 'surveys_builder:preview' survey.pk %}">Далее: проверить и опубликовать</a></p>
-<p><a href="{% url 'surveys_builder:survey_delete' survey.pk %}">Удалить черновик опросника</a></p>
-{% else %}<p>Опросник опубликован. Вопросы доступны только для чтения.</p>{% endif %}
-{% endblock %}
+{% extends 'surveys_builder/base.html' %}{% block content %}<div class="page-heading"><p class="step-label">Шаг 2 из 4</p><h1>Соберите опрос из блоков</h1><p>{% if sections %}Откройте блок, чтобы добавить или изменить его содержимое. Затем добавьте ещё блок или переходите к участникам.{% else %}Начните с первого блока. Это раздел опроса: например, «О себе» или «Об учёбе».{% endif %}</p></div>
+{% for section in sections %}<article class="block-card"><div class="card-heading"><div><p class="step-label">Блок {{ forloop.counter }}</p><h2>{{ section.block.title }}</h2><p class="muted">Вопросы: {{ section.questions|length }} · Элементы: {{ section.items|length }}{% if not section.items %} · Пока пустой{% endif %}</p></div><a class="button secondary" href="{% url 'surveys_builder:block_content' survey.pk section.block.pk %}">{% if section.items %}Открыть блок{% else %}Добавить содержимое{% endif %}</a></div>
+{% if survey.is_draft %}<details class="advanced compact"><summary>Другие действия с блоком</summary><p><a href="{% url 'surveys_builder:block_edit' survey.pk section.block.pk %}">Название и видимость</a> · <a class="danger-link" href="{% url 'surveys_builder:block_delete' survey.pk section.block.pk %}">Удалить блок</a></p><div class="block-actions">
+<form method="post" action="{% url 'surveys_builder:block_action' survey.pk section.block.pk 'up' %}">{% csrf_token %}{% include 'surveys_builder/_revision.html' %}<button class="secondary">Выше</button></form><form method="post" action="{% url 'surveys_builder:block_action' survey.pk section.block.pk 'down' %}">{% csrf_token %}{% include 'surveys_builder/_revision.html' %}<button class="secondary">Ниже</button></form><form method="post" action="{% url 'surveys_builder:save_block_template' survey.pk section.block.pk %}">{% csrf_token %}{% include 'surveys_builder/_revision.html' %}<button class="secondary">Сохранить в библиотеку</button></form></div></details>{% endif %}</article>{% empty %}<div class="empty-state"><h2>Здесь будут блоки вашего опроса</h2><p>Создайте новый или возьмите готовый из библиотеки.</p></div>{% endfor %}
+{% if survey.is_draft %}<div class="add-block-choice">{% if can_add_block %}<a class="button {% if sections %}secondary{% endif %}" href="{% url 'surveys_builder:block_create' survey.pk %}">{% if sections %}+ Добавить следующий блок{% else %}Создать первый блок{% endif %}</a><a href="{% url 'surveys_builder:import_block_template' survey.pk %}">Выбрать готовый блок</a>{% else %}<p>Добавлено максимальное количество блоков: 50.</p>{% endif %}</div>
+<footer class="flow-footer"><a href="{% url 'surveys_builder:survey_edit' survey.pk %}">← Название опроса</a><div>{% if structure_ready %}<a class="button" href="{% url 'surveys_builder:audience' survey.pk %}">Далее: получатели и срок →</a>{% else %}<span class="button disabled" aria-disabled="true">Далее: получатели и срок →</span><p class="footer-hint">{% if empty_blocks %}Сначала добавьте содержимое в пустые блоки.{% else %}Сначала создайте первый блок.{% endif %}</p>{% endif %}</div></footer>{% else %}<a class="button secondary" href="{% url 'surveys_builder:preview' survey.pk %}">Посмотреть опрос</a>{% endif %}{% endblock %}

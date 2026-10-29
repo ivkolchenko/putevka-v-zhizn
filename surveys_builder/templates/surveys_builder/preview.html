@@ -1,18 +1,6 @@
-{% extends 'surveys_builder/base.html' %}
-{% block content %}
-<h1>3. Проверка и публикация: {{ survey.title }}</h1>
-{{ survey.description|linebreaks }}
-<h2>Предпросмотр вопросов</h2>
-<form method="post">{% csrf_token %}{% include 'surveys_builder/_response_form.html' %}<button type="submit">Проверить заполнение (без сохранения)</button></form>
+{% extends 'surveys_builder/base.html' %}{% block content %}<div class="page-heading"><p class="step-label">{% if not survey.is_block_template %}Шаг 4 из 4{% else %}Предпросмотр черновика{% endif %}</p><h1>Проверьте опрос</h1></div><p>Предпросмотр только для чтения.</p>{{ survey.description|linebreaks }}
+{% for section in sections %}<section class="question-block"><h2>{{ section.block.title }}</h2>{{ section.block.description|linebreaks }}{% if section.has_visibility_filters %}<p><small>Видимость блока зависит от заданных фильтров участников.</small></p>{% endif %}
+{% for item in section.items %}{% if item.type == 'section' %}{% include 'surveys_builder/_text_section.html' with text_section=item.section %}{% else %}<div class="response-field"><h3>{{ item.question.title }}{% if item.question.required %} *{% endif %}</h3>{{ item.question.description|linebreaks }}{% if item.question.has_options %}<ul>{% for option in item.question.options.all %}<li>{{ option.text }}</li>{% endfor %}</ul>{% else %}<p class="answer-placeholder">{{ item.question.get_answer_type_display }}</p>{% endif %}</div>{% endif %}{% endfor %}</section>{% endfor %}
 {% if errors %}<h2>До публикации нужно исправить</h2><ul>{% for error in errors %}<li>{{ error }}</li>{% endfor %}</ul>{% endif %}
-{% if page_obj %}
-<h2>Получатели: {{ page_obj.paginator.count }}</h2>
-<ul>{% for name, username in recipients %}<li>{{ name }} ({{ username }})</li>{% endfor %}</ul>
-{% include 'surveys_builder/_pagination.html' %}
-{% endif %}
-{% if publish_token %}
-<p>После публикации список получателей и вопросы будут зафиксированы. Опрос появится в личных кабинетах этих учеников. Ответы именные; сотрудникам доступны отправленные ответы.</p>
-<form method="post" action="{% url 'surveys_builder:publish' survey.pk %}">{% csrf_token %}
-<input type="hidden" name="token" value="{{ publish_token }}"><button type="submit">Опубликовать опросник</button></form>
-{% endif %}
-{% endblock %}
+{% if page_obj %}<h2>Получатели: {{ page_obj.paginator.count }}</h2><ul>{% for name, username in recipients %}<li>{{ name }} ({{ username }})</li>{% endfor %}</ul>{% include 'surveys_builder/_pagination.html' %}{% endif %}
+{% if publish_token %}<p>{% if survey.deadline %}Срок ответа: {{ survey.deadline }}.{% else %}Без ограничения по времени.{% endif %} При публикации получатели и видимые им блоки фиксируются.</p><form method="post" action="{% url 'surveys_builder:publish' survey.pk %}">{% csrf_token %}<input type="hidden" name="token" value="{{ publish_token }}"><div class="form-footer"><a href="{% url 'surveys_builder:audience' survey.pk %}">← Получатели и срок</a><button>Опубликовать опрос</button></div></form>{% endif %}{% if not publish_token %}<footer class="flow-footer">{% if survey.is_block_template %}<a href="{% url 'surveys_builder:block_templates' %}">← Библиотека блоков</a>{% else %}<a href="{% url 'surveys_builder:survey_detail' survey.pk %}">← Блоки опроса</a>{% if survey.is_draft %}<a class="button secondary" href="{% url 'surveys_builder:audience' survey.pk %}">Получатели и срок →</a>{% endif %}{% endif %}</footer>{% endif %}{% endblock %}

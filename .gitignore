@@ -41,3 +41,4 @@ logs/
 *.dump.sha256
 putevka-backup.env
 /.tmp/
+/.media-survey-private/

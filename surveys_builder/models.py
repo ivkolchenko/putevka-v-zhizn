@@ -2,6 +2,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
+from .storage import PrivateSurveyImageStorage
 
 
 class SurveysBuilder(models.Model):
@@ -31,6 +32,7 @@ class SurveysBuilder(models.Model):
     included_users = models.ManyToManyField(settings.AUTH_USER_MODEL, blank=True, related_name='included_in_surveys')
     excluded_users = models.ManyToManyField(settings.AUTH_USER_MODEL, blank=True, related_name='excluded_from_surveys')
     revision = models.PositiveIntegerField(default=1)
+    is_block_template = models.BooleanField(default=False, db_index=True)
 
     class Meta:
         ordering = ['-created_at', '-pk']
@@ -52,12 +54,26 @@ class QuestionBlock(models.Model):
     title = models.CharField('Название блока', max_length=200)
     description = models.TextField('Описание блока', blank=True, max_length=3000)
     position = models.PositiveIntegerField('Порядок', default=1)
+    visibility_filters = models.JSONField(default=dict, blank=True)
 
     class Meta:
         ordering = ['position', 'pk']
 
     def __str__(self):
         return self.title
+
+
+class BlockTextSection(models.Model):
+    block = models.ForeignKey(QuestionBlock, on_delete=models.CASCADE, related_name='text_sections')
+    title = models.CharField('Заголовок секции', max_length=200, blank=True)
+    text = models.TextField('Текст', max_length=20000, blank=True)
+    image = models.ImageField('Картинка', upload_to='surveys/sections/%Y/%m/', blank=True,
+                              storage=PrivateSurveyImageStorage())
+    image_alt = models.CharField('Описание картинки', max_length=500, blank=True)
+    position = models.PositiveIntegerField(default=1)
+
+    class Meta:
+        ordering = ['position', 'pk']
 
 
 class QuestionsBuilder(models.Model):
@@ -71,13 +87,14 @@ class QuestionsBuilder(models.Model):
         SCALE = 'scale', 'Шкала от 1 до 5'
 
     survey = models.ForeignKey(SurveysBuilder, on_delete=models.CASCADE, related_name='questions', verbose_name='Опросник')
-    block = models.ForeignKey(QuestionBlock, null=True, blank=True, on_delete=models.SET_NULL,
+    block = models.ForeignKey(QuestionBlock, on_delete=models.CASCADE,
                               related_name='questions', verbose_name='Блок')
     title = models.CharField('Текст вопроса', max_length=500)
     description = models.CharField('Подсказка', max_length=1000, blank=True)
     answer_type = models.CharField('Тип ответа', max_length=20, choices=AnswerType.choices, default=AnswerType.SHORT_TEXT)
     required = models.BooleanField('Обязательный вопрос', default=False)
     position = models.PositiveIntegerField('Порядок', default=0)
+    block_position = models.PositiveIntegerField(default=1)
 
     class Meta:
         ordering = ['position', 'id']
@@ -113,6 +130,7 @@ class SurveyAssignment(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='survey_assignments')
     assigned_at = models.DateTimeField(auto_now_add=True)
     recipient_snapshot = models.JSONField(default=dict)
+    visible_block_ids = models.JSONField(default=list)
 
     class Meta:
         ordering = ['pk']

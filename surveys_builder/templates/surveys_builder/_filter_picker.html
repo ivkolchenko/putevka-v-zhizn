@@ -1,0 +1,11 @@
+<div data-filter-picker>
+<p>Между добавленными фильтрами действует «И», внутри фильтра — «ИЛИ». Без фильтров подходят все доступные участники.</p>
+<div class="filter-toolbar"><select data-filter-choice aria-label="Выбрать фильтр"><option value="">Выберите фильтр</option>{% for group in filter_form.filter_groups %}<option value="{{ group.name }}">{{ group.field.label }}</option>{% endfor %}</select><button type="button" data-add-filter>Добавить фильтр</button><button type="button" data-clear-filters>Сбросить фильтры</button></div>
+{% for group in filter_form.filter_groups %}
+<fieldset class="audience-field" data-filter-panel="{{ group.name }}" {% if not group.active %}hidden{% endif %}>
+<legend>{{ group.field.label }}</legend><input type="hidden" name="active_filters" value="{{ group.name }}">
+{{ group.field.errors }}<div class="audience-input">{{ group.field }}</div>
+<button type="button" data-remove-filter>Убрать фильтр</button>
+</fieldset>{% endfor %}
+<noscript><style>[data-filter-panel][hidden] { display: block !important; }</style><p>Для добавления фильтров по одному включите JavaScript. Здесь доступны все фильтры.</p></noscript>
+</div>

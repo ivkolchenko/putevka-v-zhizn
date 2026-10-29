@@ -12,6 +12,8 @@ from django.http import Http404
 from django.test import Client, TestCase, TransactionTestCase
 from django.urls import reverse
 
+from core.models import RegistrationPersonalData
+
 from . import services
 from .forms import QuestionsBuilderForm
 from .models import QuestionBlock, QuestionsBuilder, SurveyAnswer, SurveyResponse, SurveysBuilder
@@ -23,6 +25,7 @@ class QuestionBlockTests(TestCase):
         User = get_user_model()
         cls.staff = User.objects.create_user(username='blocks-staff', is_staff=True)
         cls.student = User.objects.create_user(username='blocks-student')
+        RegistrationPersonalData.objects.create(user=cls.student, email='student-registration@example.test', current_step='finish')
 
     def setUp(self):
         self.client.force_login(self.staff)
@@ -40,7 +43,7 @@ class QuestionBlockTests(TestCase):
 
     def question(self, title, block=None, **extra):
         return services.save_question(self.survey.pk, self.staff, {
-            'title': title, 'answer_type': 'short_text', 'block': block.pk if block else '', **extra,
+            'title': title, 'answer_type': 'short_text', 'block': (block or self.survey.blocks.first() or self.block()).pk, **extra,
         }, self.version())
 
     def ids(self):
@@ -72,18 +75,13 @@ class QuestionBlockTests(TestCase):
         self.assertEqual(self.survey.blocks.count(), 1)
 
     def test_question_order_is_grouped_and_move_appends_to_target(self):
-        block_a, block_b = self.block(), self.block('Блок B')
-        b = self.question('B1', block_b)
-        a = self.question('A1', block_a)
-        ungrouped = self.question('Общий')
-        self.assertEqual(self.ids(), [ungrouped.pk, a.pk, b.pk])
-        services.save_question(self.survey.pk, self.staff,
-            {'title': a.title, 'answer_type': a.answer_type, 'block': block_b.pk}, self.version(), a.pk)
-        self.assertEqual(self.ids(), [ungrouped.pk, b.pk, a.pk])
-        services.save_question(self.survey.pk, self.staff,
-            {'title': b.title, 'answer_type': b.answer_type, 'block': ''}, self.version(), b.pk)
-        self.assertEqual(self.ids(), [ungrouped.pk, b.pk, a.pk])
-        self.assertEqual(list(self.survey.questions.values_list('position', flat=True)), [1, 2, 3])
+        a, b = self.block(), self.block('B')
+        b1, a1 = self.question('B1', b), self.question('A1', a)
+        self.assertEqual(self.ids(), [a1.pk, b1.pk])
+        services.save_question(self.survey.pk, self.staff, {'title': a1.title, 'answer_type': a1.answer_type, 'block': b.pk}, self.version(), a1.pk)
+        self.assertEqual(self.ids(), [b1.pk, a1.pk])
+        with self.assertRaises(services.InvalidForm):
+            services.save_question(self.survey.pk, self.staff, {'title': b1.title, 'answer_type': b1.answer_type, 'block': ''}, self.version(), b1.pk)
 
     def test_question_moves_stay_inside_block_and_duplicate_keeps_block_and_options(self):
         block_a, block_b = self.block(), self.block('Блок B')
@@ -103,11 +101,10 @@ class QuestionBlockTests(TestCase):
     def test_reordering_blocks_moves_their_questions(self):
         a, b = self.block(), self.block('Блок B')
         a1, b1 = self.question('A1', a), self.question('B1', b)
-        common = self.question('Общий')
         services.reorder_blocks(self.survey.pk, self.staff, [b.pk, a.pk], self.version())
-        self.assertEqual(self.ids(), [common.pk, b1.pk, a1.pk])
+        self.assertEqual(self.ids(), [b1.pk, a1.pk])
         services.block_action(self.survey.pk, a.pk, self.staff, 'up', self.version())
-        self.assertEqual(self.ids(), [common.pk, a1.pk, b1.pk])
+        self.assertEqual(self.ids(), [a1.pk, b1.pk])
 
     def test_bad_reorders_are_atomic_and_cannot_interleave_blocks(self):
         a, b = self.block(), self.block('Блок B')
@@ -123,18 +120,13 @@ class QuestionBlockTests(TestCase):
         services.reorder_questions(self.survey.pk, self.staff, [a2.pk, a1.pk, b1.pk], original_revision)
         self.assertEqual(self.ids(), [a2.pk, a1.pk, b1.pk])
 
-    def test_deleting_block_preserves_questions_options_and_relative_order(self):
+    def test_deleting_block_removes_its_content_and_keeps_other_blocks(self):
         a, b = self.block(), self.block('Блок B')
         a1 = self.question('A1', a, answer_type='single_choice', options_text='Да\nНет')
-        a2, b1, common = self.question('A2', a), self.question('B1', b), self.question('Общий')
-        option_ids = list(a1.options.values_list('pk', flat=True))
+        b1 = self.question('B1', b)
         services.block_action(self.survey.pk, a.pk, self.staff, 'delete', self.version())
-        a1.refresh_from_db()
-        a2.refresh_from_db()
-        self.assertIsNone(a1.block_id)
-        self.assertIsNone(a2.block_id)
-        self.assertEqual(list(a1.options.values_list('pk', flat=True)), option_ids)
-        self.assertEqual(self.ids(), [common.pk, a1.pk, a2.pk, b1.pk])
+        self.assertFalse(QuestionsBuilder.objects.filter(pk=a1.pk).exists())
+        self.assertEqual(self.ids(), [b1.pk])
         b.refresh_from_db()
         self.assertEqual(b.position, 1)
 
@@ -189,7 +181,7 @@ class QuestionBlockTests(TestCase):
         self.assertNotEqual(copied_block.pk, block.pk)
         self.assertEqual(copied_block.title, block.title)
         self.assertEqual(copy.questions.get(title='Варианты').block_id, copied_block.pk)
-        self.assertIsNone(copy.questions.get(title='Общий').block_id)
+        self.assertEqual(copy.questions.get(title='Общий').block_id, copied_block.pk)
         self.assertFalse(copy.assignments.exists())
 
     def test_api_block_crud_and_question_patch_move(self):
@@ -212,19 +204,17 @@ class QuestionBlockTests(TestCase):
         self.assertEqual(response.json()['questions'][0]['block_id'], block_id)
         response = self.api('delete', 'block_detail', {'revision': self.version()}, block_id)
         self.assertEqual(response.status_code, 200)
-        self.assertIsNone(response.json()['questions'][0]['block_id'])
+        self.assertEqual(response.json()['questions'], [])
         self.assertEqual(response.json()['blocks'], [])
 
-    def test_api_reordering_and_null_block(self):
+    def test_api_reordering_and_rejecting_null_block(self):
         a, b = self.block(), self.block('B')
         a1, b1 = self.question('A1', a), self.question('B1', b)
         response = self.api('put', 'block_reorder', {'revision': self.version(), 'block_ids': [b.pk, a.pk]})
         self.assertEqual(response.status_code, 200)
         self.assertEqual([q['id'] for q in response.json()['questions']], [b1.pk, a1.pk])
         response = self.api('patch', 'question_detail', {'revision': self.version(), 'block_id': None}, a1.pk)
-        self.assertEqual(response.status_code, 200)
-        self.assertIsNone(response.json()['question']['block_id'])
-        self.assertEqual(self.ids(), [a1.pk, b1.pk])
+        self.assertEqual(response.status_code, 400)
 
     def test_api_rejects_malformed_ids_and_conflicts_without_mutation(self):
         a = self.block()
@@ -264,11 +254,10 @@ class QuestionBlockTests(TestCase):
             {'title': 'Отредактирован', 'revision': self.version()})
         self.assertEqual(response.status_code, 302)
         delete_url = reverse('surveys_builder:block_delete', args=[self.survey.pk, block.pk])
-        self.assertContains(self.client.get(delete_url), 'Вопросы сохранятся')
+        self.assertContains(self.client.get(delete_url), 'будут удалены')
         self.assertTrue(self.survey.blocks.exists())
         self.assertEqual(self.client.post(delete_url, {'revision': self.version()}).status_code, 302)
-        question.refresh_from_db()
-        self.assertIsNone(question.block_id)
+        self.assertFalse(QuestionsBuilder.objects.filter(pk=question.pk).exists())
 
     def test_preview_student_form_results_and_csv_preserve_block_order(self):
         a, b = self.block(), self.block('Блок B')
@@ -312,7 +301,7 @@ class QuestionBlockTests(TestCase):
 class BlockMigrationTests(TransactionTestCase):
     def test_existing_published_answers_and_order_survive_migration(self):
         before = ('surveys_builder', '0004_alter_surveysbuilder_options_and_more')
-        after = ('surveys_builder', '0005_question_blocks')
+        after = ('surveys_builder', '0006_block_content_and_assignment')
         executor = MigrationExecutor(connection)
         executor.migrate([before])
         try:
@@ -326,7 +315,7 @@ class BlockMigrationTests(TransactionTestCase):
             answer = apps.get_model('surveys_builder', 'SurveyAnswer').objects.create(response=response, question=question, value='Старый ответ')
             MigrationExecutor(connection).migrate([after])
             migrated = QuestionsBuilder.objects.get(pk=question.pk)
-            self.assertIsNone(migrated.block_id)
+            self.assertEqual(migrated.block.title, 'Основной блок')
             self.assertEqual(migrated.position, 7)
             self.assertEqual(SurveysBuilder.objects.get(pk=survey.pk).status, 'published')
             self.assertEqual(SurveyAnswer.objects.get(pk=answer.pk).value, 'Старый ответ')

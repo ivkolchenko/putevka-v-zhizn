@@ -14,11 +14,11 @@ from django.shortcuts import get_object_or_404
 from my_study.models import Course, School, Subject
 
 from . import services
-from .api_serializers import (block_data, question_data, recipient_data, response_data, submitted_response_data,
+from .api_serializers import (block_data, question_data, section_data, recipient_data, response_data, submitted_response_data,
                               survey_data)
-from .forms import AudienceForm
+from .forms import AudienceForm, BlockVisibilityForm
 from .models import QuestionsBuilder, SurveyAssignment, SurveyResponse, SurveysBuilder
-from .selectors import resolve_audience
+from .selectors import assignment_questions, resolve_audience
 
 
 class ApiError(Exception):
@@ -124,9 +124,11 @@ def audience_input(data):
         if isinstance(field, (forms.MultipleChoiceField, forms.ModelMultipleChoiceField)):
             if not isinstance(value, list) or any(type(v) not in (int, str) for v in value):
                 raise ApiError('invalid_type', f'{name}: ожидается массив строк или ID.')
+        elif name == 'deadline' and (value is None or isinstance(value, str)):
+            continue
         elif not isinstance(value, str):
             raise ApiError('invalid_type', f'{name}: ожидается строка.')
-    return {'mode': 'filters', 'account_active': 'yes', **data}
+    return {'mode': 'filters', **data}
 
 
 @endpoint('GET')
@@ -137,6 +139,9 @@ def metadata(request):
                if isinstance(field, forms.ChoiceField) and not isinstance(field, forms.ModelChoiceField)}
     return JsonResponse({
         'csrf_token': get_token(request), 'audience_choices': choices,
+        'audience_filter_fields': list(AudienceForm.FILTER_FIELDS),
+        'block_visibility_filter_fields': list(BlockVisibilityForm.FILTER_FIELDS),
+        'recipient_requirements': {'active': True, 'registration_complete': True},
         'answer_types': [{'value': v, 'label': str(label)} for v, label in QuestionsBuilder.AnswerType.choices],
         'survey_statuses': [{'value': v, 'label': str(label)} for v, label in SurveysBuilder.Status.choices],
         'limits': {'blocks': 50, 'questions': 100, 'options_min': 2, 'options_max': 50, 'page_size_max': 100},
@@ -183,11 +188,11 @@ def audience_preview(request):
 @endpoint('GET', 'POST')
 def surveys(request):
     if request.method == 'POST':
-        data = payload(request, ('title', 'description', 'deadline'))
-        text_fields(data, ('title', 'description', 'deadline'), nullable=('deadline',))
+        data = payload(request, ('title', 'description'))
+        text_fields(data, ('title', 'description'))
         survey = services.create_survey(request.user, data)
         return JsonResponse(survey_data(survey, detail=True), status=201)
-    queryset = SurveysBuilder.objects.all()
+    queryset = SurveysBuilder.objects.filter(is_block_template=False)
     status = request.GET.get('status')
     if status:
         if status not in SurveysBuilder.Status.values:
@@ -206,10 +211,10 @@ def survey_detail(request, pk):
         services.delete_survey(pk, request.user, revision(data))
         return HttpResponse(status=204)
     if request.method == 'PATCH':
-        data = payload(request, ('title', 'description', 'deadline', 'revision'))
+        data = payload(request, ('title', 'description', 'revision'))
         expected = revision(data)
-        text_fields(data, ('title', 'description', 'deadline'), nullable=('deadline',))
-        values = {name: data.get(name, getattr(survey, name)) for name in ('title', 'description', 'deadline')}
+        text_fields(data, ('title', 'description'))
+        values = {name: data.get(name, getattr(survey, name)) for name in ('title', 'description')}
         survey = services.update_survey(pk, request.user, values, expected)
     return JsonResponse(survey_data(survey, detail=True))
 
@@ -245,8 +250,8 @@ def question_input(data, question=None):
               for name, default in [('title', ''), ('description', ''), ('answer_type', 'short_text'), ('required', False)]}
     values['options_text'] = '\n'.join(options)
     block_id = data.get('block_id', question.block_id if question else None)
-    if block_id is not None and (type(block_id) is not int or block_id < 1):
-        raise ApiError('invalid_type', 'block_id: ожидается положительный целый ID или null.')
+    if type(block_id) is not int or block_id < 1:
+        raise ApiError('invalid_type', 'block_id: выберите блок этого опроса (положительный целый ID).')
     values['block'] = block_id if block_id is not None else ''
     return values
 
@@ -257,7 +262,7 @@ QUESTION_FIELDS = ('title', 'description', 'answer_type', 'required', 'options',
 @endpoint('GET', 'POST')
 def blocks(request, pk):
     if request.method == 'POST':
-        data = payload(request, ('title', 'description', 'revision'))
+        data = payload(request, ('title', 'description', 'visibility_filters', 'revision'))
         text_fields(data, ('title', 'description'))
         block = services.save_block(pk, request.user, data, revision(data))
         return JsonResponse({'revision': block.survey.revision, 'block': block_data(block)}, status=201)
@@ -271,13 +276,13 @@ def block_detail(request, pk, block_pk):
     block = get_object_or_404(survey.blocks, pk=block_pk)
     if request.method == 'GET':
         return JsonResponse({'revision': survey.revision, 'block': block_data(block)})
-    data = payload(request, ('revision',) if request.method == 'DELETE' else ('title', 'description', 'revision'))
+    data = payload(request, ('revision',) if request.method == 'DELETE' else ('title', 'description', 'visibility_filters', 'revision'))
     expected = revision(data)
     if request.method == 'DELETE':
         survey = services.block_action(pk, block_pk, request.user, 'delete', expected)
         return JsonResponse(survey_data(survey, detail=True))
     text_fields(data, ('title', 'description'))
-    values = {name: data.get(name, getattr(block, name)) for name in ('title', 'description')}
+    values = {name: data.get(name, getattr(block, name)) for name in ('title', 'description', 'visibility_filters')}
     block = services.save_block(pk, request.user, values, expected, block_pk)
     return JsonResponse({'revision': block.survey.revision, 'block': block_data(block)})
 
@@ -418,7 +423,7 @@ def my_surveys(request):
 @endpoint('GET', staff=False)
 def my_survey_detail(request, pk):
     assignment = my_assignment(pk, request.user)
-    return JsonResponse({'id': assignment.pk, 'survey': survey_data(assignment.survey, detail=True, staff=False),
+    return JsonResponse({'id': assignment.pk, 'survey': survey_data(assignment.survey, detail=True, staff=False, block_ids=assignment.visible_block_ids),
                          'response': response_data(getattr(assignment, 'response', None))})
 
 
@@ -430,7 +435,7 @@ def my_response(request, pk):
     if type(final) is not bool or not isinstance(data.get('answers'), dict):
         raise ApiError('invalid_type', 'Передайте answers как объект и final как boolean.')
     assignment = my_assignment(pk, request.user)
-    questions = {str(q.pk): q for q in assignment.survey.questions.all()}
+    questions = {str(q.pk): q for q in assignment_questions(assignment)}
     values = {}
     for key, value in data['answers'].items():
         if key not in questions:
@@ -452,3 +457,82 @@ def my_response(request, pk):
         values['q_' + key] = value
     response = services.save_response(pk, request.user, values, final=final, revision=expected)
     return JsonResponse(response_data(response))
+
+
+@endpoint('GET', 'POST')
+def block_templates(request):
+    if request.method == 'POST':
+        data = payload(request, ('title', 'description', 'visibility_filters'))
+        text_fields(data, ('title', 'description'))
+        template = services.create_block_template(request.user, data)
+        return JsonResponse(survey_data(template, detail=True), status=201)
+    templates = SurveysBuilder.objects.filter(is_block_template=True)
+    return JsonResponse(pagination(request, templates, lambda survey: survey_data(survey, detail=True)))
+
+
+@endpoint('POST')
+def save_block_template(request, pk, block_pk):
+    data = payload(request, ('revision',))
+    template = services.create_block_template(request.user, {}, source_pk=pk, block_pk=block_pk, revision=revision(data))
+    return JsonResponse(survey_data(template, detail=True), status=201)
+
+
+@endpoint('POST')
+def import_block_template(request, pk):
+    data = payload(request, ('revision', 'template_id'))
+    template_id = data.get('template_id')
+    if type(template_id) is not int or template_id < 1:
+        raise ApiError('invalid_type', 'template_id: ожидается положительный целый ID.')
+    block = services.import_block_template(pk, request.user, template_id, revision(data))
+    return JsonResponse({'revision': block.survey.revision, 'block': block_data(block)}, status=201)
+
+
+def section_payload(request, section=None):
+    if request.content_type == 'multipart/form-data' and request.method == 'POST':
+        data = request.POST.dict()
+        if set(data) - {'title', 'text', 'image_alt', 'revision', 'remove_image'} or set(request.FILES) - {'image'}:
+            raise ApiError('unknown_fields', 'Неизвестные поля текстовой секции.')
+        try:
+            data['revision'] = int(data.get('revision', ''))
+        except (TypeError, ValueError):
+            raise ApiError('invalid_revision', 'Передайте целое поле revision.')
+    else:
+        data = payload(request, ('title', 'text', 'image_alt', 'revision', 'remove_image'))
+        if 'remove_image' in data:
+            if type(data['remove_image']) is not bool:
+                raise ApiError('invalid_type', 'remove_image: ожидается boolean.')
+    expected = revision(data)
+    text_fields(data, ('title', 'text', 'image_alt'))
+    if section:
+        for name in ('title', 'text', 'image_alt'):
+            data.setdefault(name, getattr(section, name))
+    return data, expected
+
+
+@endpoint('POST')
+def text_sections(request, pk, block_pk):
+    data, expected = section_payload(request)
+    section = services.save_text_section(pk, block_pk, request.user, data, request.FILES, expected)
+    return JsonResponse({'revision': section.block.survey.revision, 'section': section_data(section)}, status=201)
+
+
+@endpoint('GET', 'POST', 'PATCH', 'DELETE')
+def text_section_detail(request, pk, block_pk, section_pk):
+    block = get_object_or_404(get_survey(pk).blocks, pk=block_pk)
+    section = get_object_or_404(block.text_sections, pk=section_pk)
+    if request.method == 'GET':
+        return JsonResponse({'revision': block.survey.revision, 'section': section_data(section)})
+    if request.method == 'DELETE':
+        data = payload(request, ('revision',))
+        survey = services.text_section_action(pk, block_pk, section_pk, request.user, 'delete', revision(data))
+        return JsonResponse({'revision': survey.revision})
+    data, expected = section_payload(request, section)
+    section = services.save_text_section(pk, block_pk, request.user, data, request.FILES, expected, section_pk)
+    return JsonResponse({'revision': section.block.survey.revision, 'section': section_data(section)})
+
+
+@endpoint('POST')
+def text_section_action(request, pk, block_pk, section_pk, action):
+    data = payload(request, ('revision',))
+    survey = services.text_section_action(pk, block_pk, section_pk, request.user, action, revision(data))
+    return JsonResponse(survey_data(survey, detail=True))

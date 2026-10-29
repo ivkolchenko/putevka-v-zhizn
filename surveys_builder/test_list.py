@@ -6,7 +6,7 @@ from django.template.loader import render_to_string
 from django.test import TestCase
 from django.urls import reverse
 
-from .models import QuestionsBuilder, SurveyAnswer, SurveyAssignment, SurveyResponse, SurveysBuilder
+from .models import QuestionBlock, QuestionsBuilder, SurveyAnswer, SurveyAssignment, SurveyResponse, SurveysBuilder
 
 
 class AllSurveysTests(TestCase):
@@ -27,7 +27,7 @@ class AllSurveysTests(TestCase):
         SurveyResponse.objects.create(assignment=assignment, status=SurveyResponse.Status.SUBMITTED)
         draft_assignment = SurveyAssignment.objects.create(survey=cls.published, user=cls.other)
         response = SurveyResponse.objects.create(assignment=draft_assignment)
-        question = QuestionsBuilder.objects.create(survey=cls.published, title='Частный вопрос')
+        question = QuestionsBuilder.objects.create(survey=cls.published, block=QuestionBlock.objects.create(survey=cls.published, title='Основной блок'), title='Частный вопрос')
         SurveyAnswer.objects.create(response=response, question=question, value='Секретный черновик ученика')
 
     def setUp(self):
