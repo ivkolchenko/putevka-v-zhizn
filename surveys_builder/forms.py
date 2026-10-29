@@ -228,6 +228,8 @@ class ResponseForm(forms.Form):
                 field = forms.DateField(widget=forms.DateInput(format='%Y-%m-%d', attrs={'type': 'date'}), **attrs)
             else:
                 field = forms.TypedChoiceField(choices=([('', 'Без ответа')] if not question.required else []) + [(n, n) for n in range(1, 6)], coerce=int, empty_value=None, widget=forms.RadioSelect, **attrs)
+            if isinstance(field.widget, (forms.TextInput, forms.Textarea)):
+                field.widget.attrs['class'] = 'form-control'
             self.fields[f'q_{question.pk}'] = field
 
     @property

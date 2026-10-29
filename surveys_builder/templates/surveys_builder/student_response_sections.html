@@ -1,0 +1,20 @@
+{% for section in sections %}
+    <section class="card shadow-sm mb-3">
+        <div class="card-body">
+            <h2 class="h5">{% if section.block %}{{ section.block.title }}{% else %}Общие вопросы{% endif %}</h2>
+            {% if section.block.description %}<div class="text-muted mb-3">{{ section.block.description|linebreaks }}</div>{% endif %}
+            <dl class="mb-0">
+                {% for item in section.items %}
+                    {% if item.type == 'section' %}
+                        <div class="mb-4">{% include 'surveys_builder/_text_section.html' with text_section=item.section %}</div>
+                    {% else %}
+                    <div class="border-bottom py-2">
+                        <dt>{{ item.question.title }}</dt>
+                        <dd class="mb-0">{{ item.value|default:'—'|linebreaksbr }}</dd>
+                    </div>
+                    {% endif %}
+                {% endfor %}
+            </dl>
+        </div>
+    </section>
+{% endfor %}

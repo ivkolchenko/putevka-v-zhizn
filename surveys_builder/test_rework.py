@@ -190,6 +190,43 @@ class ReworkedSurveyTests(TestCase):
         response = services.save_response(assignment.pk, self.it, {f'q_{visible.pk}': 'Виден'}, final=True, revision=0)
         self.assertEqual(response.answers.count(), 1)
 
+    def test_student_pages_skip_hidden_blocks_and_preserve_text_and_images(self):
+        first = self.block('Первый видимый')
+        question = self.question(first, 'Обязательный ответ')
+        section = services.save_text_section(self.survey.pk, first.pk, self.staff,
+            {'text': 'Инструкция перед ответом', 'image_alt': 'Учебная картинка'},
+            {'image': self.png()}, self.version())
+        hidden = self.block('Скрытый промежуточный', {'profiles': ['medic']})
+        hidden_question = self.question(hidden, 'Вопрос только для медиков')
+        last = self.block('Памятка без вопросов')
+        self.section(last, 'Финальная памятка')
+        self.assign()
+        assignment = self.publish()
+        self.client.force_login(self.it)
+        url = reverse('student_surveys:answer', args=[assignment.pk])
+        second_url = f'{url}?page=2'
+        image_url = reverse('surveys_builder:section_image', args=[section.pk])
+        page = self.client.get(url)
+        self.assertEqual(page.context['page_count'], 2)
+        self.assertContains(page, image_url)
+        self.assertNotContains(page, hidden.title)
+        invalid = self.client.post(url, {'action': 'next', 'response_revision': 0})
+        self.assertTrue(invalid.context['form'].errors)
+        self.assertContains(invalid, image_url)
+        saved = self.client.post(url, {'action': 'next', 'response_revision': 0, f'q_{question.pk}': 'Мой ответ'})
+        self.assertRedirects(saved, second_url)
+        self.assertContains(self.client.get(second_url), 'Финальная памятка')
+        response = assignment.response
+        tampered = self.client.post(second_url, {'action': 'submit', 'response_revision': response.revision,
+            f'q_{hidden_question.pk}': 'Подмена'})
+        self.assertTrue(tampered.context['form'].errors)
+        sent = self.client.post(second_url, {'action': 'submit', 'response_revision': response.revision})
+        self.assertRedirects(sent, second_url)
+        self.assertContains(self.client.get(url), 'Мой ответ')
+        self.assertContains(self.client.get(url), image_url)
+        self.assertContains(self.client.get(second_url), 'Финальная памятка')
+        self.assertEqual(self.client.get(f'{url}?page=3').status_code, 404)
+
     def test_block_new_filters_save_restore_and_clear_in_editor(self):
         response = self.client.get(reverse('surveys_builder:block_create', args=[self.survey.pk]))
         for name in ('grades', 'statuses', 'steps'):

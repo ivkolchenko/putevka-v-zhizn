@@ -9,6 +9,8 @@ from django.db.models import Count, Max
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 
+from core.models import Notification, UserNotification
+
 from .forms import AudienceForm, BlockTextSectionForm, BlockVisibilityForm, QuestionBlockForm, QuestionsBuilderForm, ResponseForm, SurveysBuilderForm
 from .models import BlockTextSection, QuestionBlock, QuestionOptions, QuestionsBuilder, SurveyAnswer, SurveyAssignment, SurveyResponse, SurveysBuilder
 from .selectors import assignment_questions, block_items, filter_students, resolve_audience, student_name, student_queryset
@@ -446,6 +448,13 @@ def publish_survey(pk, actor, token):
             'status': info.status if info else None,
         }))
     SurveyAssignment.objects.bulk_create(assignments)
+    notification = Notification.objects.create(
+        message=f'Вам назначен опрос «{survey.title}». Откройте раздел «Опросы» в личном кабинете.',
+        sender=actor,
+    )
+    UserNotification.objects.bulk_create([
+        UserNotification(notification=notification, recipient=user) for user in users
+    ])
     survey.status = SurveysBuilder.Status.PUBLISHED
     survey.published_at = timezone.now()
     changed(survey)
@@ -473,7 +482,8 @@ def delete_survey(pk, actor, revision, *, allow_published=False):
     survey = locked_survey(pk, actor)
     if allow_published:
         check_revision(survey, revision)
-        # Ответы удаляются через назначения перед защищёнными вопросами опроса.
+        if survey.assignments.filter(response__isnull=False).exists():
+            raise ValidationError('Нельзя удалить опрос с ответами или черновиками. Завершите приём или переместите его в архив.')
         survey.assignments.all().delete()
     else:
         require_draft(survey, revision)
@@ -544,6 +554,23 @@ def import_block_template(pk, actor, template_pk, revision):
 
 @transaction.atomic
 def save_response(assignment_pk, actor, data, *, final, revision):
+    return write_response(assignment_pk, actor, data, final=final, revision=revision)
+
+
+@transaction.atomic
+def save_response_page(assignment_pk, actor, data, *, final, revision, question_ids, require_page):
+    return write_response(
+        assignment_pk,
+        actor,
+        data,
+        final=final,
+        revision=revision,
+        page_question_ids=question_ids,
+        require_page=require_page,
+    )
+
+
+def write_response(assignment_pk, actor, data, *, final, revision, page_question_ids=None, require_page=False):
     if not actor.is_authenticated or not actor.is_active:
         raise PermissionDenied
     # Во всех операциях сначала блокируется опрос, затем назначение/ответ.
@@ -562,15 +589,37 @@ def save_response(assignment_pk, actor, data, *, final, revision):
     if expected != (response.revision if response else 0):
         raise RevisionConflict('Ответ изменён в другой вкладке. Обновите страницу.')
     questions = list(assignment_questions(assignment))
-    form = ResponseForm(data, questions=questions, final=final)
+    if page_question_ids is None:
+        page_questions = questions
+    else:
+        selected_ids = set(page_question_ids)
+        page_questions = [question for question in questions if question.pk in selected_ids]
+        if len(page_questions) != len(selected_ids):
+            raise ValidationError('Страница опроса изменилась. Обновите её.')
+    form = ResponseForm(data, questions=page_questions, final=final or require_page)
     if not form.is_valid():
         raise InvalidForm(form)
+    values = form.answer_values()
+    if page_question_ids is not None and final:
+        saved_values = {
+            answer.question_id: answer.value
+            for answer in SurveyAnswer.objects.filter(response=response)
+        } if response else {}
+        saved_values.update(values)
+        complete_form = ResponseForm(
+            {f'q_{question_id}': value for question_id, value in saved_values.items()},
+            questions=questions,
+            final=True,
+        )
+        if not complete_form.is_valid():
+            raise ValidationError('Заполните обязательные вопросы на предыдущих страницах опроса.')
+        values = complete_form.answer_values()
+        page_questions = questions
     if response is None:
         response = SurveyResponse.objects.create(assignment=assignment)
     else:
         response.revision += 1
-    values = form.answer_values()
-    for question in questions:
+    for question in page_questions:
         SurveyAnswer.objects.update_or_create(response=response, question=question,
                                              defaults={'value': values[question.pk]})
     if final:

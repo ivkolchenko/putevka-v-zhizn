@@ -81,7 +81,7 @@ class DemoSurveyTests(TestCase):
         self.assertEqual(blocks[0].description, 'Сохранить пользовательское изменение')
         self.assertEqual(SurveysBuilder.objects.filter(title=DEMO_BLOCKS_TITLE).count(), 1)
 
-    def test_block_demo_renders_headings_and_all_question_fields(self):
+    def test_block_demo_renders_read_only_blocks(self):
         staff = get_user_model().objects.create_user(username='block-demo-staff', is_staff=True)
         call_command('seed_demo_survey', with_blocks=True, author_id=staff.pk, stdout=StringIO())
         survey = SurveysBuilder.objects.get(title=DEMO_BLOCKS_TITLE)

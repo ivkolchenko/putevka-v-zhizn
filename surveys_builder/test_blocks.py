@@ -264,18 +264,38 @@ class QuestionBlockTests(TestCase):
         a1, b1 = self.question('A1', a, required=True), self.question('B1', b)
         preview = self.client.get(reverse('surveys_builder:preview', args=[self.survey.pk]))
         self.assertContains(preview, a.description)
-        self.assertLess(preview.content.index(a.title.encode()), preview.content.index(b.title.encode()))
+        self.assertContains(preview, a1.title)
+        self.assertContains(preview, b.title)
+        self.assertContains(preview, b1.title)
+        self.assertNotContains(preview, f'name="q_{a1.pk}"')
+        self.assertNotContains(preview, f'name="q_{b1.pk}"')
         assignment = self.publish()
         self.client.force_login(self.student)
         detail_url = reverse('student_surveys:answer', args=[assignment.pk])
-        self.assertContains(self.client.get(detail_url), a.title)
-        invalid = self.client.post(detail_url, {'action': 'submit', 'response_revision': 0})
+        second_page_url = f'{detail_url}?page=2'
+        first_page = self.client.get(detail_url)
+        self.assertContains(first_page, a.title)
+        self.assertNotContains(first_page, b.title)
+        self.assertNotContains(first_page, f'name="q_{b1.pk}"')
+        invalid = self.client.post(detail_url, {'action': 'next', 'response_revision': 0})
         self.assertContains(invalid, a.title)
         self.assertTrue(invalid.context['form'].errors)
-        data = {'action': 'submit', 'response_revision': 0, f'q_{a1.pk}': 'Первый ответ', f'q_{b1.pk}': 'Второй ответ'}
-        self.assertEqual(self.client.post(detail_url, data).status_code, 302)
+        first_result = self.client.post(detail_url, {
+            'action': 'next', 'response_revision': 0, f'q_{a1.pk}': 'Первый ответ',
+        })
+        self.assertRedirects(first_result, second_page_url)
+        second_page = self.client.get(second_page_url)
+        self.assertContains(second_page, f'name="q_{b1.pk}"')
+        self.assertNotContains(second_page, a.title)
+        self.assertNotContains(second_page, f'name="q_{a1.pk}"')
+        response_revision = assignment.response.revision
+        final_result = self.client.post(second_page_url, {
+            'action': 'submit', 'response_revision': response_revision, f'q_{b1.pk}': 'Второй ответ',
+        })
+        self.assertRedirects(final_result, second_page_url)
         self.assertContains(self.client.get(detail_url), a.title)
         self.assertContains(self.client.get(detail_url), 'Первый ответ')
+        self.assertContains(self.client.get(second_page_url), 'Второй ответ')
         student_api = self.client.get(reverse('student_surveys:student_surveys_api:detail', args=[assignment.pk])).json()
         self.assertEqual([item['id'] for item in student_api['survey']['blocks']], [a.pk, b.pk])
         self.client.force_login(self.staff)
@@ -286,6 +306,95 @@ class QuestionBlockTests(TestCase):
         rows = list(csv.reader(io.StringIO(b''.join(exported.streaming_content).decode('utf-8-sig')), delimiter=';'))
         self.assertEqual(rows[0][-2:], [f'[{a.title}] A1', f'[{b.title}] B1'])
         self.assertEqual(rows[1][-2:], ['Первый ответ', 'Второй ответ'])
+
+    def test_each_block_is_a_page_and_page_answers_do_not_clear_other_blocks(self):
+        first = self.block('Первый блок')
+        second = self.block('Второй блок')
+        first_question = self.question('Вопрос первого блока', first, required=True)
+        second_question = self.question('Вопрос второго блока', second, required=True)
+        assignment = self.publish()
+        self.client.force_login(self.student)
+        first_url = reverse('student_surveys:answer', args=[assignment.pk])
+        second_url = f'{first_url}?page=2'
+
+        first_page = self.client.get(first_url)
+        self.assertContains(first_page, 'Страница 1 из 2')
+        self.assertContains(first_page, first_question.title)
+        self.assertNotContains(first_page, second_question.title)
+        self.assertEqual(self.client.get(f'{first_url}?page=3').status_code, 404)
+        self.assertEqual(self.client.post(first_url, {
+            'action': 'submit', 'response_revision': 0, f'q_{first_question.pk}': 'Первый',
+        }).status_code, 400)
+
+        next_result = self.client.post(first_url, {
+            'action': 'next', 'response_revision': 0, f'q_{first_question.pk}': 'Первый',
+        })
+        self.assertRedirects(next_result, second_url)
+        response = SurveyResponse.objects.get(assignment=assignment)
+        self.assertEqual(response.answers.get(question=first_question).value, 'Первый')
+        second_page = self.client.get(second_url)
+        self.assertContains(second_page, 'Страница 2 из 2')
+        self.assertContains(second_page, second_question.title)
+        self.assertNotContains(second_page, first_question.title)
+
+        saved = self.client.post(second_url, {
+            'action': 'save', 'response_revision': response.revision,
+            f'q_{second_question.pk}': 'Черновик второго блока',
+        })
+        self.assertRedirects(saved, second_url)
+        response.refresh_from_db()
+        self.assertEqual(response.answers.get(question=first_question).value, 'Первый')
+        self.assertEqual(response.answers.get(question=second_question).value, 'Черновик второго блока')
+        self.assertContains(self.client.get(first_url), 'Первый')
+
+        final = self.client.post(second_url, {
+            'action': 'submit', 'response_revision': response.revision,
+            f'q_{second_question.pk}': 'Второй',
+        })
+        self.assertRedirects(final, second_url)
+        response.refresh_from_db()
+        self.assertEqual(response.status, SurveyResponse.Status.SUBMITTED)
+        self.assertEqual(response.answers.get(question=first_question).value, 'Первый')
+        self.assertEqual(response.answers.get(question=second_question).value, 'Второй')
+        self.assertNotContains(self.client.get(first_url), second_question.title)
+        self.assertNotContains(self.client.get(second_url), first_question.title)
+
+    def test_final_page_requires_earlier_answers_and_rejects_other_page_fields(self):
+        first = self.block('Первый блок')
+        second = self.block('Второй блок')
+        first_question = self.question('Обязательный первый', first, required=True)
+        second_question = self.question('Обязательный второй', second, required=True)
+        assignment = self.publish()
+        self.client.force_login(self.student)
+        first_url = reverse('student_surveys:answer', args=[assignment.pk])
+        second_url = f'{first_url}?page=2'
+
+        tampered = self.client.post(second_url, {
+            'action': 'save', 'response_revision': 0,
+            f'q_{first_question.pk}': 'Подмена', f'q_{second_question.pk}': 'Второй',
+        })
+        self.assertContains(tampered, 'Ответ содержит вопрос из другого опросника')
+        self.assertFalse(SurveyResponse.objects.filter(assignment=assignment).exists())
+
+        incomplete = self.client.post(second_url, {
+            'action': 'submit', 'response_revision': 0, f'q_{second_question.pk}': 'Второй',
+        })
+        self.assertContains(incomplete, 'Заполните обязательные вопросы на предыдущих страницах', status_code=400)
+        self.assertContains(incomplete, 'value="Второй"', status_code=400)
+        self.assertFalse(SurveyResponse.objects.filter(assignment=assignment).exists())
+
+    def test_default_block_and_explicit_block_have_their_own_pages(self):
+        general_question = self.question('Общий вопрос')
+        default_block = general_question.block
+        block = self.block('Блок')
+        block_question = self.question('Вопрос блока', block)
+        assignment = self.publish()
+        self.client.force_login(self.student)
+        first_url = reverse('student_surveys:answer', args=[assignment.pk])
+        self.assertContains(self.client.get(first_url), default_block.title)
+        self.assertContains(self.client.get(first_url), general_question.title)
+        self.assertNotContains(self.client.get(first_url), block_question.title)
+        self.assertContains(self.client.get(f'{first_url}?page=2'), block_question.title)
 
     def test_block_delete_rolls_back_if_order_update_fails(self):
         block = self.block()
@@ -301,7 +410,7 @@ class QuestionBlockTests(TestCase):
 class BlockMigrationTests(TransactionTestCase):
     def test_existing_published_answers_and_order_survive_migration(self):
         before = ('surveys_builder', '0004_alter_surveysbuilder_options_and_more')
-        after = ('surveys_builder', '0006_block_content_and_assignment')
+        after = ('surveys_builder', '0007_merge_block_content_and_response_protection')
         executor = MigrationExecutor(connection)
         executor.migrate([before])
         try:
