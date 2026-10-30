@@ -11,6 +11,7 @@ urlpatterns = [
     path('<int:pk>/', views.survey_detail, name='survey_detail'),
     path('<int:pk>/edit/', views.survey_edit, name='survey_edit'),
     path('<int:pk>/audience/', views.audience, name='audience'),
+    path('<int:pk>/recipients/add/', views.additional_recipients, name='additional_recipients'),
     path('<int:pk>/preview/', views.preview, name='preview'),
     path('<int:pk>/publish/', views.publish, name='publish'),
     path('<int:pk>/copy/', views.survey_copy, name='survey_copy'),

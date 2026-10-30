@@ -1,17 +1,18 @@
 {% extends 'surveys_builder/staff/base.html' %}
 {% block builder_content %}
 <h1>{% if survey.is_block_template %}Удалить черновик блока «{{ survey.title }}»?{% else %}Удалить опрос «{{ survey.title }}»?{% endif %}</h1>
-{% if survey.is_block_template %}<p>Черновик и его содержимое будут удалены. Ранее добавленные в опросы копии останутся.</p>{% else %}<p>Можно удалить опрос, пока на него нет ответов и черновиков. При удалении исчезнут вопросы, варианты и назначения получателям.</p>{% endif %}
+{% if survey.is_block_template %}<p>Черновик и его содержимое будут удалены. Ранее добавленные в опросы копии останутся.</p>{% else %}<p>При полном удалении исчезнут опрос, его блоки, вопросы, варианты, назначения и все ответы учеников, включая черновики.</p>{% endif %}
 {% if not survey.is_block_template %}
 <p>Получателей: {{ counts.recipients }}. Ответов и черновиков: {{ counts.responses }},
 из них отправлено: {{ counts.submitted }}.</p>
 {% endif %}
-{% if counts.responses %}
-<p role="alert">Удаление недоступно: ответы и черновики учеников сохраняются. Завершите приём или переместите опрос в архив.</p>
-{% else %}
-<form method="post">{% csrf_token %}{% include 'surveys_builder/partials/_revision.html' %}
-    <button type="submit">{% if survey.is_block_template %}Удалить черновик блока{% else %}Удалить опрос и назначения{% endif %}</button>
-</form>
+{% if not survey.is_block_template %}
+<p class="text-danger" role="alert">Полное удаление нельзя отменить.</p>
+{% if survey.status != 'archived' %}<p>Чтобы сохранить содержимое и ответы, переместите опрос в архив. Приём новых ответов прекратится.</p>{% endif %}
 {% endif %}
+<form method="post" class="d-flex flex-wrap gap-2">{% csrf_token %}{% include 'surveys_builder/partials/_revision.html' %}
+    {% if not survey.is_block_template and survey.status != 'archived' %}<button type="submit" class="btn btn-outline-secondary" name="action" value="archive">В архив</button>{% endif %}
+    <button type="submit" class="btn btn-danger" name="action" value="delete">{% if survey.is_block_template %}Удалить черновик блока{% else %}Удалить полностью{% endif %}</button>
+</form>
 <p><a href="{% if survey.is_block_template %}{% url 'surveys_builder:block_templates' %}{% else %}{% url 'staff_surveys_list' %}{% endif %}">Отмена — вернуться {% if survey.is_block_template %}к черновикам блоков{% else %}ко всем опросам{% endif %}</a></p>
 {% endblock %}

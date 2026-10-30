@@ -1,7 +1,9 @@
 {% extends 'staff_templates/base_without_sidebar.html' %}
+{% load static %}
 {% block title %}Все опросы{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="{% static 'surveys_builder/css/builder.css' %}?v=6">{% endblock %}
 {% block content %}
-<div class="container py-4">
+<div class="container py-4 survey-list">
     <div class="d-flex flex-wrap align-items-center gap-3 mb-4">
         <h1 class="mb-0 me-auto">Все опросы</h1>
         <a class="btn btn-primary" href="{% url 'surveys_builder:constructor' %}">Создать опрос</a> <a class="btn btn-outline-secondary" href="{% url 'surveys_builder:block_templates' %}">Черновики блоков</a>
@@ -38,15 +40,8 @@
                     <td>{% if item.is_draft %}<span class="text-muted">После публикации</span>{% else %}{{ item.recipient_count }}{% endif %}</td>
                     <td>{{ item.submitted_count }}</td>
                     <td>{{ item.deadline|date:'d.m.Y H:i'|default:'Без ограничения' }}</td>
-                    <td>
-                        <div class="d-flex flex-wrap gap-2">
-                            {% if item.is_draft %}
-                            <a href="{% url 'surveys_builder:survey_detail' item.pk %}">Продолжить создание</a>
-                            {% endif %}
-                            <a href="{% url 'surveys_builder:preview' item.pk %}">Посмотреть вопросы</a>
-                            <a href="{% url 'surveys_builder:results' item.pk %}">Результаты</a>
-                            <a class="text-danger" href="{% url 'surveys_builder:survey_delete' item.pk %}">Удалить</a>
-                        </div>
+                    <td class="survey-actions-cell">
+                        {% include 'surveys_builder/partials/_survey_row_actions.html' %}
                     </td>
                 </tr>
             {% endfor %}</tbody>

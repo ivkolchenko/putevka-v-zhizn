@@ -178,6 +178,15 @@ class AudienceForm(BlockVisibilityForm):
         return data
 
 
+class AdditionalAudienceForm(AudienceForm):
+    deadline = None
+
+    def __init__(self, *args, survey, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['mode'].initial = 'individual'
+        self.fields['included_users'].queryset = student_queryset().exclude(survey_assignments__survey=survey)
+
+
 class BlockTextSectionForm(forms.ModelForm):
     remove_image = forms.BooleanField(required=False, widget=forms.HiddenInput)
 

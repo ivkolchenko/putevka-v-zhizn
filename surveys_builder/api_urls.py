@@ -11,6 +11,7 @@ urlpatterns = [
     path('', api.surveys, name='list'),
     path('<int:pk>/', api.survey_detail, name='detail'),
     path('<int:pk>/audience/', api.audience, name='audience'),
+    path('<int:pk>/recipients/add/', api.additional_recipients, name='additional_recipients'),
     path('<int:pk>/blocks/', api.blocks, name='blocks'),
     path('<int:pk>/blocks/import/', api.import_block_template, name='import_block_template'),
     path('<int:pk>/blocks/<int:block_pk>/save-template/', api.save_block_template, name='save_block_template'),

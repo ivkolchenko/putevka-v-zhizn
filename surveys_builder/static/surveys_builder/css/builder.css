@@ -94,3 +94,27 @@
 @media(max-width:700px) { .survey-builder .app-header { padding:16px; gap:12px; } .survey-builder .app-name { font-size:13px; } .survey-builder .builder-main { padding:20px 16px 32px; } .survey-builder h1 { font-size:25px; } .survey-builder .workflow ol { grid-template-columns:repeat(2,minmax(0,1fr)); gap:4px 12px; } .survey-builder .workflow li { font-size:12px; padding:8px 0; } .survey-builder .card-heading, .survey-builder .heading-actions { flex-wrap:wrap; gap:12px; } .survey-builder .block-card, .survey-builder .content-card, .survey-builder .editor-form, .survey-builder .question-block { padding:18px; } .survey-builder .flow-footer { flex-direction:column; align-items:stretch; gap:12px; } .survey-builder .flow-actions { display:grid; grid-template-columns:1fr; } .survey-builder .form-footer { flex-wrap:wrap; } .survey-builder .flow-footer .button { width:100%; } .survey-builder .option-row button { font-size:12px; padding:8px; } }
 
 .survey-builder .editor-form.card { padding:0; }
+
+.survey-builder .results-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin:20px 0 24px; padding:16px; background:white; border:1px solid var(--line); border-radius:12px; }
+.survey-builder .results-toolbar .btn { display:inline-flex; align-items:center; justify-content:center; gap:8px; min-height:42px; padding:9px 14px; font-size:14px; font-weight:500; white-space:nowrap; }
+.survey-builder .results-toolbar form.results-copy-form { margin:0; }
+.survey-builder .results-toolbar .dropdown-item { padding:10px 16px; font-size:14px; }
+@media(max-width:700px) {
+    .survey-builder .results-toolbar { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); padding:12px; gap:8px; }
+    .survey-builder .results-toolbar .results-primary, .survey-builder .results-toolbar .results-menu { grid-column:1/-1; }
+    .survey-builder .results-toolbar .btn { width:100%; }
+    .survey-builder .results-toolbar .dropdown-menu { width:100%; min-width:0; }
+    .survey-builder .results-toolbar .dropdown-item { white-space:normal; }
+}
+@media(max-width:380px) {
+    .survey-builder .results-toolbar { grid-template-columns:1fr; }
+}
+
+.survey-list .survey-actions-cell { width:1%; white-space:nowrap; }
+.survey-list .survey-row-actions { display:flex; align-items:center; gap:8px; }
+.survey-list .survey-row-actions .btn { display:inline-flex; align-items:center; justify-content:center; gap:7px; min-height:38px; padding:8px 12px; font-size:14px; white-space:nowrap; }
+.survey-list .survey-row-main { min-width:126px; }
+.survey-list .survey-row-actions .dropdown-menu { min-width:235px; padding:6px; border-radius:10px; box-shadow:0 8px 24px #10203a14; }
+.survey-list .survey-row-actions .dropdown-item { display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius:6px; font-size:14px; }
+.survey-list .survey-row-actions .dropdown-item i { flex:0 0 16px; }
+.survey-list .survey-row-actions .dropdown-divider { margin:5px 0; }

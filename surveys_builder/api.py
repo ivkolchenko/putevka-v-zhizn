@@ -16,7 +16,7 @@ from my_study.models import Course, School, Subject
 from . import services
 from .api_serializers import (block_data, question_data, section_data, recipient_data, response_data, submitted_response_data,
                               survey_data)
-from .forms import AudienceForm, BlockVisibilityForm
+from .forms import AdditionalAudienceForm, AudienceForm, BlockVisibilityForm
 from .models import QuestionsBuilder, SurveyAssignment, SurveyResponse, SurveysBuilder
 from .selectors import assignment_questions, resolve_audience
 
@@ -114,8 +114,8 @@ def get_survey(pk):
     return get_object_or_404(SurveysBuilder, pk=pk)
 
 
-def audience_input(data):
-    form = AudienceForm()
+def audience_input(data, form=None):
+    form = form if form is not None else AudienceForm()
     unknown = set(data) - set(form.fields)
     if unknown:
         raise ApiError('unknown_fields', 'Неизвестные поля аудитории: ' + ', '.join(sorted(unknown)))
@@ -146,6 +146,17 @@ def metadata(request):
         'survey_statuses': [{'value': v, 'label': str(label)} for v, label in SurveysBuilder.Status.choices],
         'limits': {'blocks': 50, 'questions': 100, 'options_min': 2, 'options_max': 50, 'page_size_max': 100},
     })
+
+
+@endpoint('POST')
+def additional_recipients(request, pk):
+    form = AdditionalAudienceForm(survey=get_survey(pk))
+    data = payload(request, ('revision', *form.fields))
+    expected = revision(data)
+    selection = audience_input({'mode': 'individual', **{key: value for key, value in data.items() if key != 'revision'}}, form)
+    survey, count = services.add_recipients(pk, request.user, selection, expected)
+    return JsonResponse({'revision': survey.revision, 'added_count': count,
+                         'recipient_count': survey.assignments.count()})
 
 
 @endpoint('GET')

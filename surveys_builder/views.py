@@ -16,7 +16,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_http_methods, require_POST
 
 from . import services
-from .forms import AudienceForm, BlockTextSectionForm, BlockVisibilityForm, QuestionBlockForm, QuestionsBuilderForm, SurveyListFilterForm, SurveysBuilderForm
+from .forms import AdditionalAudienceForm, AudienceForm, BlockTextSectionForm, BlockVisibilityForm, QuestionBlockForm, QuestionsBuilderForm, SurveyListFilterForm, SurveysBuilderForm
 from .models import BlockTextSection, SurveyAssignment, SurveyResponse, SurveysBuilder
 from .selectors import assignment_blocks, assignment_questions, block_items, group_questions, resolve_audience, student_name
 
@@ -143,6 +143,38 @@ def audience(request, pk):
 
 @staff_member_required
 @require_http_methods(['GET', 'POST'])
+def additional_recipients(request, pk):
+    survey = get_survey(pk)
+    try:
+        services.require_additional_audience(survey)
+    except ValidationError as error:
+        return failure(request, error, survey)
+    form = AdditionalAudienceForm(survey=survey)
+    recipients = None
+    if request.method == 'POST':
+        try:
+            action = request.POST.get('action', 'add')
+            if action == 'preview':
+                services.check_revision(survey, request.POST.get('revision'))
+                form, recipients, _ = services.additional_audience(survey, request.POST)
+            elif action == 'add':
+                _, count = services.add_recipients(pk, request.user, request.POST, request.POST.get('revision'))
+                messages.success(request, f'Опрос назначен новым участникам: {count}. Уведомления появились в их кабинетах.')
+                return redirect('surveys_builder:results', pk=pk)
+            else:
+                raise ValidationError('Неизвестное действие.')
+        except services.InvalidForm as error:
+            form = error.form
+        except ValidationError as error:
+            return failure(request, error, survey)
+    return page(request, 'additional_recipients.html', survey, form=form,
+                assigned_count=survey.assignments.count(), available_count=form.fields['included_users'].queryset.count(),
+                recipients=[(student_name(user), user.get_username()) for user in (recipients or [])[:50]],
+                recipient_count=len(recipients) if recipients is not None else None)
+
+
+@staff_member_required
+@require_http_methods(['GET', 'POST'])
 def survey_detail(request, pk):
     survey = get_survey(pk)
     if survey.is_block_template and request.method == 'GET':
@@ -257,8 +289,15 @@ def survey_delete(request, pk):
     survey = get_survey(pk)
     if request.method == 'POST':
         try:
-            services.delete_survey(pk, request.user, request.POST.get('revision'), allow_published=True)
-            messages.success(request, 'Черновик блока удалён.' if survey.is_block_template else 'Опрос и назначения удалены.')
+            action = request.POST.get('action', 'delete')
+            if action == 'archive':
+                services.change_status(pk, request.user, action, request.POST.get('revision'))
+                messages.success(request, 'Опрос перемещён в архив. Содержимое и ответы сохранены.')
+            elif action == 'delete':
+                services.delete_survey(pk, request.user, request.POST.get('revision'), allow_published=True)
+                messages.success(request, 'Черновик блока удалён.' if survey.is_block_template else 'Опрос, назначения и все ответы удалены.')
+            else:
+                raise ValidationError('Неизвестное действие.')
             return redirect('surveys_builder:block_templates' if survey.is_block_template else 'staff_surveys_list')
         except ValidationError as error:
             return failure(request, error, survey)

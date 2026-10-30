@@ -11,7 +11,7 @@ from django.utils import timezone
 
 from core.models import Notification, UserNotification
 
-from .forms import AudienceForm, BlockTextSectionForm, BlockVisibilityForm, QuestionBlockForm, QuestionsBuilderForm, ResponseForm, SurveysBuilderForm
+from .forms import AdditionalAudienceForm, AudienceForm, BlockTextSectionForm, BlockVisibilityForm, QuestionBlockForm, QuestionsBuilderForm, ResponseForm, SurveysBuilderForm
 from .models import BlockTextSection, QuestionBlock, QuestionOptions, QuestionsBuilder, SurveyAnswer, SurveyAssignment, SurveyResponse, SurveysBuilder
 from .selectors import assignment_questions, block_items, filter_students, resolve_audience, student_name, student_queryset
 
@@ -414,6 +414,58 @@ def publish_token(survey, actor, ids):
                           'audience': audience_fingerprint(ids), 'visibility': visibility_fingerprint(survey, ids)}, salt='surveys-builder.publish')
 
 
+def require_additional_audience(survey):
+    if survey.is_block_template or not survey.accepts_answers:
+        raise ValidationError('Добавить участников можно только в опубликованный опрос с открытым приёмом ответов.')
+
+
+def additional_audience(survey, data):
+    require_additional_audience(survey)
+    form = AdditionalAudienceForm(data, survey=survey)
+    if not form.is_valid():
+        raise InvalidForm(form)
+    users = list(resolve_audience(form.cleaned_data).exclude(survey_assignments__survey=survey))
+    if not users:
+        form.add_error(None, 'Новых участников по этим условиям нет. Измените фильтры или выбор участников.')
+        raise InvalidForm(form)
+    mapping = block_visibility(survey, users)
+    missing = sum(not ids for ids in mapping.values())
+    if missing:
+        form.add_error(None, f'Для {missing} новых участников нет видимых блоков. Выберите других участников.')
+        raise InvalidForm(form)
+    return form, users, mapping
+
+
+def _assign_users(survey, actor, users, mapping):
+    assignments = []
+    for user in users:
+        info = getattr(user, 'user_info', None)
+        assignments.append(SurveyAssignment(survey=survey, user=user, visible_block_ids=mapping[user.pk], recipient_snapshot={
+            'name': student_name(user), 'username': user.get_username(),
+            'grade': info.next_year_class_digit if info else None,
+            'profile': info.internal_study_profile if info else None,
+            'status': info.status if info else None,
+        }))
+    SurveyAssignment.objects.bulk_create(assignments)
+    notification = Notification.objects.create(
+        message=f'Вам назначен опрос «{survey.title}». Откройте раздел «Опросы» в личном кабинете.',
+        sender=actor,
+    )
+    UserNotification.objects.bulk_create([
+        UserNotification(notification=notification, recipient=user) for user in users
+    ])
+
+
+@transaction.atomic
+def add_recipients(pk, actor, data, revision):
+    survey = locked_survey(pk, actor)
+    check_revision(survey, revision)
+    _, users, mapping = additional_audience(survey, data)
+    _assign_users(survey, actor, users, mapping)
+    changed(survey)
+    return survey, len(users)
+
+
 @transaction.atomic
 def publish_survey(pk, actor, token):
     survey = locked_survey(pk, actor)
@@ -438,23 +490,7 @@ def publish_survey(pk, actor, token):
     if confirmation.get('visibility') != visibility_fingerprint(survey, [user.pk for user in users]):
         raise ValidationError('Видимость блоков изменилась после предпросмотра. Проверьте опрос заново.')
     mapping = block_visibility(survey, users)
-    assignments = []
-    for user in users:
-        info = getattr(user, 'user_info', None)
-        assignments.append(SurveyAssignment(survey=survey, user=user, visible_block_ids=mapping[user.pk], recipient_snapshot={
-            'name': student_name(user), 'username': user.get_username(),
-            'grade': info.next_year_class_digit if info else None,
-            'profile': info.internal_study_profile if info else None,
-            'status': info.status if info else None,
-        }))
-    SurveyAssignment.objects.bulk_create(assignments)
-    notification = Notification.objects.create(
-        message=f'Вам назначен опрос «{survey.title}». Откройте раздел «Опросы» в личном кабинете.',
-        sender=actor,
-    )
-    UserNotification.objects.bulk_create([
-        UserNotification(notification=notification, recipient=user) for user in users
-    ])
+    _assign_users(survey, actor, users, mapping)
     survey.status = SurveysBuilder.Status.PUBLISHED
     survey.published_at = timezone.now()
     changed(survey)
@@ -468,7 +504,9 @@ def change_status(pk, actor, action, revision):
     if action == 'close' and survey.status == SurveysBuilder.Status.PUBLISHED:
         survey.status = SurveysBuilder.Status.CLOSED
         survey.closed_at = timezone.now()
-    elif action == 'archive' and survey.status in (SurveysBuilder.Status.PUBLISHED, SurveysBuilder.Status.CLOSED):
+    elif action == 'archive' and not survey.is_block_template and survey.status in (
+        SurveysBuilder.Status.DRAFT, SurveysBuilder.Status.PUBLISHED, SurveysBuilder.Status.CLOSED
+    ):
         survey.status = SurveysBuilder.Status.ARCHIVED
         survey.closed_at = survey.closed_at or timezone.now()
     else:
@@ -482,8 +520,8 @@ def delete_survey(pk, actor, revision, *, allow_published=False):
     survey = locked_survey(pk, actor)
     if allow_published:
         check_revision(survey, revision)
-        if survey.assignments.filter(response__isnull=False).exists():
-            raise ValidationError('Нельзя удалить опрос с ответами или черновиками. Завершите приём или переместите его в архив.')
+        # Сначала удаляем ответы, защищающие назначения и вопросы от каскада.
+        SurveyResponse.objects.filter(assignment__survey=survey).delete()
         survey.assignments.all().delete()
     else:
         require_draft(survey, revision)

@@ -1,0 +1,34 @@
+{% extends 'surveys_builder/staff/base.html' %}
+{% block builder_content %}
+<div class="page-heading">
+    <h1>Добавить участников</h1>
+    <p>Выберите, кому ещё назначить опрос «{{ survey.title }}».</p>
+</div>
+<p>Уже назначено: {{ assigned_count }}. Доступно новых участников: {{ available_count }}.</p>
+<p>В списке только активные ученики с завершённой регистрацией, которым этот опрос ещё не назначен.</p>
+<p>{% if survey.deadline %}Срок сдачи для новых участников: {{ survey.deadline|date:'d.m.Y H:i' }}.{% else %}Срок сдачи не ограничен.{% endif %} Для них действуют фильтры видимости блоков опроса.</p>
+{% if available_count %}
+<form method="post" class="editor-form" data-assignment-form>
+    {% csrf_token %}{% include 'surveys_builder/partials/_revision.html' %}
+    {{ form.non_field_errors }}{{ form.mode.errors }}
+    <fieldset><legend>{{ form.mode.label }}</legend>{{ form.mode }}</fieldset>
+    <div data-filter-mode>{% include 'surveys_builder/partials/_filter_picker.html' with filter_form=form %}</div>
+    <div data-individual-mode>
+        <h2>Новые участники</h2>{{ form.included_users.errors }}
+        <div class="participant-picker">{{ form.included_users }}</div>
+    </div>
+    <button class="secondary" type="submit" name="action" value="preview">Проверить выбор</button>
+    <div class="form-footer">
+        <a href="{% url 'surveys_builder:results' survey.pk %}">Отмена — к результатам</a>
+        <button type="submit" name="action" value="add">Назначить опрос выбранным участникам</button>
+    </div>
+</form>
+{% else %}
+<p class="text-muted">Опрос уже назначен всем доступным участникам. После появления новых учеников их можно будет добавить здесь.</p>
+<p><a href="{% url 'surveys_builder:results' survey.pk %}">← К результатам опроса</a></p>
+{% endif %}
+{% if recipient_count != None %}
+<h2>Будет добавлено: {{ recipient_count }}</h2><p>Показаны первые 50 участников.</p>
+<ul>{% for name, username in recipients %}<li>{{ name }} ({{ username }})</li>{% endfor %}</ul>
+{% endif %}
+{% endblock %}

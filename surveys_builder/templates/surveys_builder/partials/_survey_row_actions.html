@@ -1,0 +1,17 @@
+<div class="survey-row-actions">
+    {% if item.is_draft %}
+    <a class="btn btn-primary btn-sm survey-row-main" href="{% url 'surveys_builder:survey_detail' item.pk %}" aria-label="Продолжить создание опроса «{{ item.title }}»"><i class="bi bi-pencil" aria-hidden="true"></i>Продолжить</a>
+    {% else %}
+    <a class="btn btn-outline-primary btn-sm survey-row-main" href="{% url 'surveys_builder:results' item.pk %}" aria-label="Результаты опроса «{{ item.title }}»"><i class="bi bi-bar-chart-line" aria-hidden="true"></i>Результаты</a>
+    {% endif %}
+    <div class="dropdown">
+        <button class="btn btn-outline-secondary btn-sm dropdown-toggle" type="button" id="survey-actions-{{ item.pk }}" data-bs-toggle="dropdown" data-bs-config='{"popperConfig":{"strategy":"fixed"}}' aria-expanded="false" aria-label="Другие действия с опросом «{{ item.title }}»">Ещё</button>
+        <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="survey-actions-{{ item.pk }}">
+            <li><a class="dropdown-item" href="{% url 'surveys_builder:preview' item.pk %}"><i class="bi bi-eye" aria-hidden="true"></i>Посмотреть вопросы</a></li>
+            {% if item.is_draft %}<li><a class="dropdown-item" href="{% url 'surveys_builder:results' item.pk %}"><i class="bi bi-bar-chart-line" aria-hidden="true"></i>Результаты</a></li>{% endif %}
+            {% if item.accepts_answers %}<li><a class="dropdown-item" href="{% url 'surveys_builder:additional_recipients' item.pk %}"><i class="bi bi-person-plus" aria-hidden="true"></i>Добавить участников</a></li>{% endif %}
+            <li><hr class="dropdown-divider"></li>
+            <li><a class="dropdown-item text-danger" href="{% url 'surveys_builder:survey_delete' item.pk %}"><i class="bi bi-trash" aria-hidden="true"></i>Удалить опрос</a></li>
+        </ul>
+    </div>
+</div>
