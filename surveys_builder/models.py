@@ -55,12 +55,21 @@ class QuestionBlock(models.Model):
     description = models.TextField('Описание блока', blank=True, max_length=3000)
     position = models.PositiveIntegerField('Порядок', default=1)
     visibility_filters = models.JSONField(default=dict, blank=True)
+    show_if_option = models.ForeignKey('QuestionOptions', on_delete=models.RESTRICT, null=True, blank=True,
+                                      related_name='dependent_blocks', verbose_name='Показывать при выборе варианта')
 
     class Meta:
         ordering = ['position', 'pk']
 
     def __str__(self):
         return self.title
+
+    def clean(self):
+        super().clean()
+        if self.show_if_option_id:
+            parent = self.show_if_option.question
+            if parent.survey_id != self.survey_id or not parent.has_options or parent.block.position >= self.position:
+                raise ValidationError({'show_if_option': 'Выберите вариант вопроса из предыдущего блока этого опроса.'})
 
 
 class BlockTextSection(models.Model):
@@ -95,6 +104,9 @@ class QuestionsBuilder(models.Model):
     required = models.BooleanField('Обязательный вопрос', default=False)
     position = models.PositiveIntegerField('Порядок', default=0)
     block_position = models.PositiveIntegerField(default=1)
+    visibility_filters = models.JSONField(default=dict, blank=True)
+    show_if_option = models.ForeignKey('QuestionOptions', on_delete=models.RESTRICT, null=True, blank=True,
+                                      related_name='dependent_questions', verbose_name='Показывать при выборе варианта')
 
     class Meta:
         ordering = ['position', 'id']
@@ -106,6 +118,20 @@ class QuestionsBuilder(models.Model):
         super().clean()
         if self.block_id and self.survey_id and self.block.survey_id != self.survey_id:
             raise ValidationError({'block': 'Блок должен принадлежать этому опросу.'})
+        if self.pk and QuestionsBuilder.objects.filter(show_if_option__question_id=self.pk).exclude(block_id=self.block_id).exists():
+            raise ValidationError({'block': 'Родительский вопрос и его подвопросы должны оставаться в одном блоке.'})
+        if self.pk and QuestionBlock.objects.filter(show_if_option__question_id=self.pk, position__lte=self.block.position).exists():
+            raise ValidationError({'block': 'Родительский вопрос должен находиться раньше зависящих от него блоков.'})
+        if self.show_if_option_id:
+            parent = self.show_if_option.question
+            if parent.survey_id != self.survey_id or parent.block_id != self.block_id or not parent.has_options:
+                raise ValidationError({'show_if_option': 'Выберите вариант вопроса с выбором ответа из этого блока.'})
+            visited = {self.pk} if self.pk else set()
+            while parent:
+                if parent.pk in visited:
+                    raise ValidationError({'show_if_option': 'Вопрос не может зависеть от себя или своих подвопросов.'})
+                visited.add(parent.pk)
+                parent = parent.show_if_option.question if parent.show_if_option_id else None
 
     @property
     def has_options(self):
@@ -132,6 +158,7 @@ class SurveyAssignment(models.Model):
     assigned_at = models.DateTimeField(auto_now_add=True)
     recipient_snapshot = models.JSONField(default=dict)
     visible_block_ids = models.JSONField(default=list)
+    visible_question_ids = models.JSONField(null=True, blank=True, default=None)
 
     class Meta:
         ordering = ['pk']

@@ -7,7 +7,7 @@ from my_study.models import Course, School, Subject
 from scholar_form.models import UserInfo
 
 from .models import BlockTextSection, QuestionBlock, QuestionsBuilder, QuestionOptions, SurveysBuilder
-from .selectors import group_questions, student_name, student_queryset
+from .selectors import conditional_question_ids, group_questions, student_name, student_queryset
 
 
 class SurveysBuilderForm(forms.ModelForm):
@@ -28,16 +28,41 @@ class SurveyListFilterForm(forms.Form):
         widget=forms.Select(attrs={'class': 'form-select'}))
 
 
+class ConditionalOptionField(forms.ModelChoiceField):
+    def label_from_instance(self, option):
+        return f'{option.question.title} — {option.text}'
+
+
+
 class QuestionBlockForm(forms.ModelForm):
+    show_if_option = ConditionalOptionField(
+        label='Показывать при выборе варианта', queryset=QuestionOptions.objects.none(), required=False,
+        empty_label='Всегда (с учётом фильтров видимости)',
+        help_text='Выберите вариант вопроса из предыдущего блока. Если вариант снят, блок скрывается, а его ответы очищаются.',
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.instance.survey_id:
+            self.fields['show_if_option'].queryset = QuestionOptions.objects.filter(
+                question__survey_id=self.instance.survey_id, question__block__position__lt=self.instance.position,
+                question__answer_type__in=['single_choice', 'multiple_choice'],
+            ).select_related('question__block').order_by('question__position', 'position', 'pk')
+
     class Meta:
         model = QuestionBlock
-        fields = ['title', 'description']
+        fields = ['title', 'description', 'show_if_option']
         widgets = {'title': forms.TextInput(attrs={'placeholder': 'Например, «О себе» или «Об учёбе»'}),
                    'description': forms.Textarea(attrs={'rows': 3})}
         labels = {'description': 'Описание (необязательно)'}
 
 
 class QuestionsBuilderForm(forms.ModelForm):
+    show_if_option = ConditionalOptionField(
+        label='Показывать при выборе варианта', queryset=QuestionOptions.objects.none(), required=False,
+        empty_label='Всегда (с учётом фильтров видимости)',
+        help_text='Для подвопроса выберите вариант родительского вопроса из этого блока. При снятии варианта ответ подвопроса очищается.',
+    )
     options_text = forms.CharField(
         label='Варианты ответа', required=False, max_length=10049,
         widget=forms.Textarea(attrs={'rows': 5}),
@@ -46,7 +71,7 @@ class QuestionsBuilderForm(forms.ModelForm):
 
     class Meta:
         model = QuestionsBuilder
-        fields = ['block', 'title', 'description', 'answer_type', 'required', 'options_text']
+        fields = ['block', 'title', 'description', 'answer_type', 'required', 'options_text', 'show_if_option']
 
     def __init__(self, *args, survey=None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -54,6 +79,16 @@ class QuestionsBuilderForm(forms.ModelForm):
             survey = self.instance.survey
         self.fields['block'].queryset = survey.blocks.all() if survey else QuestionBlock.objects.none()
         self.fields['block'].empty_label = 'Выберите блок'
+        block_id = self.data.get('block') if self.is_bound else self.initial.get('block', self.instance.block_id)
+        try:
+            block_id = int(block_id)
+        except (TypeError, ValueError):
+            block_id = None
+        if survey and block_id:
+            self.fields['show_if_option'].queryset = QuestionOptions.objects.filter(
+                question__survey=survey, question__block_id=block_id,
+                question__answer_type__in=['single_choice', 'multiple_choice'],
+            ).exclude(question_id=self.instance.pk).select_related('question').order_by('question__position', 'position', 'pk')
         if self.instance.pk:
             self.fields['options_text'].initial = '\n'.join(o.text for o in self.instance.options.all())
 
@@ -83,7 +118,10 @@ class QuestionsBuilderForm(forms.ModelForm):
             else:
                 option = QuestionOptions.objects.create(question=question, text=text, position=position)
             keep.append(option.pk)
-        question.options.exclude(pk__in=keep).delete()
+        removed = question.options.exclude(pk__in=keep)
+        if removed.filter(dependent_questions__isnull=False).exists() or removed.filter(dependent_blocks__isnull=False).exists():
+            raise ValidationError('Этот вариант открывает подвопрос или блок. Сначала измените условия или удалите зависимое содержимое.')
+        removed.delete()
 
 
 class StudentMultipleChoiceField(forms.ModelMultipleChoiceField):
@@ -210,13 +248,16 @@ class BlockTextSectionForm(forms.ModelForm):
 
 class ResponseForm(forms.Form):
     """Одна форма для предпросмотра, черновика и окончательной отправки."""
-    def __init__(self, *args, questions, final=True, blocks=None, **kwargs):
+    def __init__(self, *args, questions, final=True, blocks=None, active_question_ids=None, **kwargs):
         self.questions = list(questions)
         self.blocks = blocks
         super().__init__(*args, **kwargs)
+        self.active_question_ids = conditional_question_ids(self.questions, self.data if self.is_bound else self.initial)
+        if active_question_ids is not None:
+            self.active_question_ids.intersection_update(active_question_ids)
         for question in self.questions:
             attrs = {'label': question.title, 'help_text': question.description,
-                     'required': question.required and final}
+                     'required': question.required and final and question.pk in self.active_question_ids}
             kind = question.answer_type
             if kind == QuestionsBuilder.AnswerType.SHORT_TEXT:
                 field = forms.CharField(max_length=1000, **attrs)
@@ -238,6 +279,9 @@ class ResponseForm(forms.Form):
                 field = forms.TypedChoiceField(choices=([('', 'Без ответа')] if not question.required else []) + [(n, n) for n in range(1, 6)], coerce=int, empty_value=None, widget=forms.RadioSelect, **attrs)
             if isinstance(field.widget, (forms.TextInput, forms.Textarea)):
                 field.widget.attrs['class'] = 'form-control'
+            if question.pk not in self.active_question_ids:
+                field.disabled = True
+                self.initial[f'q_{question.pk}'] = None
             self.fields[f'q_{question.pk}'] = field
 
     @property
@@ -248,6 +292,8 @@ class ResponseForm(forms.Form):
                             key=lambda b: (b.position, b.pk))
         return [{'block': section['block'], 'fields': [self[f'q_{q.pk}'] for q in section['questions']],
                  'items': [{'type': item['type'], 'section': item.get('section'),
+                            'question': item.get('question'),
+                            'hidden': item['type'] == 'question' and item['question'].pk not in self.active_question_ids,
                             'field': self[f"q_{item['question'].pk}"] if item['type'] == 'question' else None}
                            for item in section['items']]}
                 for section in group_questions(self.questions, blocks)]
@@ -263,7 +309,7 @@ class ResponseForm(forms.Form):
         from decimal import Decimal
         values = {}
         for question in self.questions:
-            value = self.cleaned_data[f'q_{question.pk}']
+            value = self.cleaned_data[f'q_{question.pk}'] if question.pk in self.active_question_ids else None
             if isinstance(value, date):
                 value = value.isoformat()
             elif isinstance(value, Decimal):

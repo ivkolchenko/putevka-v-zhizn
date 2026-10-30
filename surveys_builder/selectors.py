@@ -26,11 +26,58 @@ def student_queryset():
 
 
 def assignment_blocks(assignment):
-    return assignment.survey.blocks.filter(pk__in=assignment.visible_block_ids).prefetch_related('text_sections')
+    return assignment.survey.blocks.filter(pk__in=assignment.visible_block_ids).select_related('show_if_option__question').prefetch_related('text_sections')
 
 
 def assignment_questions(assignment):
-    return assignment.survey.questions.filter(block_id__in=assignment.visible_block_ids).select_related('block').prefetch_related('options')
+    questions = assignment.survey.questions.filter(block_id__in=assignment.visible_block_ids)
+    if assignment.visible_question_ids is not None:
+        questions = questions.filter(pk__in=assignment.visible_question_ids)
+    questions = questions.select_related('block', 'show_if_option__question').prefetch_related('options')
+    available = conditional_question_ids(list(questions), blocks=list(assignment_blocks(assignment)))
+    return questions.filter(pk__in=available)
+
+
+def conditional_visibility(questions, blocks=None, values=None):
+    available_questions = {q.pk: q for q in questions}
+    available_blocks = {block.pk: block for block in blocks} if blocks is not None else None
+    active = {}
+
+    def matches(kind, pk, visiting):
+        key = (kind, pk)
+        if key in active:
+            return active[key]
+        if key in visiting:
+            return False
+        obj = (available_questions if kind == 'question' else available_blocks).get(pk)
+        if obj is None:
+            return False
+        branch = visiting | {key}
+        visible = True
+        if kind == 'question' and available_blocks is not None:
+            visible = matches('block', obj.block_id, branch)
+        if visible and obj.show_if_option_id:
+            parent_id = obj.show_if_option.question_id
+            visible = matches('question', parent_id, branch)
+            if visible and values is not None:
+                name = f'q_{parent_id}'
+                value = values.getlist(name) if hasattr(values, 'getlist') else values.get(name)
+                selected = value if isinstance(value, list) else [value]
+                visible = str(obj.show_if_option_id) in [str(item) for item in selected]
+        active[key] = visible
+        return visible
+
+    block_ids = {pk for pk in available_blocks if matches('block', pk, set())} if available_blocks is not None else set()
+    question_ids = {pk for pk in available_questions if matches('question', pk, set())}
+    return block_ids, question_ids
+
+
+def conditional_question_ids(questions, values=None, blocks=None):
+    return conditional_visibility(questions, blocks, values)[1]
+
+
+def conditional_block_ids(blocks, questions, values=None):
+    return conditional_visibility(questions, blocks, values)[0]
 
 
 def student_name(user):

@@ -1,0 +1,6 @@
+<details class="advanced" {% if show_visibility %}open{% endif %}>
+    <summary>Дополнительно: кому виден вопрос</summary>
+    <p>По умолчанию — всем получателям, которым виден блок. Добавьте фильтры, чтобы ограничить видимость вопроса.</p>
+    {{ visibility_form.non_field_errors }}
+    {% include 'surveys_builder/partials/_filter_picker.html' with filter_form=visibility_form %}
+</details>
