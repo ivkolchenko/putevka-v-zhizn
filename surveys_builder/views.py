@@ -17,8 +17,8 @@ from django.views.decorators.http import require_http_methods, require_POST
 
 from . import services
 from .forms import AdditionalAudienceForm, AudienceForm, BlockTextSectionForm, BlockVisibilityForm, QuestionBlockForm, QuestionsBuilderForm, SurveyListFilterForm, SurveysBuilderForm
-from .models import BlockTextSection, SurveyAssignment, SurveyResponse, SurveysBuilder
-from .selectors import assignment_blocks, assignment_questions, block_items, group_questions, resolve_audience, student_name
+from .models import BlockTextSection, QuestionBlock, SurveyAssignment, SurveyResponse, SurveysBuilder
+from .selectors import assignment_blocks, assignment_questions, conditional_question_ids, conditional_block_ids, block_items, group_questions, resolve_audience, student_name
 
 
 def page(request, template, survey=None, **context):
@@ -194,7 +194,8 @@ def survey_detail(request, pk):
 def block_edit(request, pk, block_pk=None):
     survey = get_survey(pk)
     block = get_object_or_404(survey.blocks, pk=block_pk) if block_pk else None
-    form = QuestionBlockForm(instance=block)
+    form_instance = block or QuestionBlock(survey=survey, position=(survey.blocks.order_by('-position').values_list('position', flat=True).first() or 0) + 1)
+    form = QuestionBlockForm(instance=form_instance)
     visibility = BlockVisibilityForm(initial=block.visibility_filters if block else {})
     if request.method == 'POST':
         try:
@@ -206,7 +207,7 @@ def block_edit(request, pk, block_pk=None):
         except ValidationError as error:
             return failure(request, error, survey)
     if request.method == 'POST':
-        form = QuestionBlockForm(request.POST, instance=block)
+        form = QuestionBlockForm(request.POST, instance=form_instance)
         visibility = BlockVisibilityForm(request.POST)
         form.is_valid()
         visibility.is_valid()
@@ -246,16 +247,22 @@ def question_edit(request, pk, question_pk):
     survey = get_survey(pk)
     question = get_object_or_404(survey.questions, pk=question_pk)
     form = QuestionsBuilderForm(instance=question)
+    visibility = BlockVisibilityForm(initial=question.visibility_filters)
     if request.method == 'POST':
         try:
             saved = services.save_question(pk, request.user, request.POST, request.POST.get('revision'), question_pk)
             messages.success(request, 'Вопрос сохранён.')
             return redirect('surveys_builder:block_content', pk=pk, block_pk=saved.block_id)
-        except services.InvalidForm as error:
-            form = error.form
+        except services.InvalidForm:
+            form = QuestionsBuilderForm(request.POST, instance=question)
+            visibility = BlockVisibilityForm(request.POST)
+            form.is_valid()
+            visibility.is_valid()
         except ValidationError as error:
             return failure(request, error, survey)
-    return page(request, 'question_edit.html', survey, form=form, edited_block=question.block, heading='Редактирование вопроса')
+    return page(request, 'question_edit.html', survey, form=form, edited_block=question.block,
+                visibility_form=visibility, show_visibility=bool(visibility.errors) or any(g['active'] for g in visibility.filter_groups),
+                heading='Редактирование вопроса')
 
 
 @staff_member_required
@@ -379,7 +386,12 @@ def response_rows(response):
 def response_sections(response):
     assignment = response.assignment
     values = {a.question_id: a.value for a in response.answers.all()}
-    sections = group_questions(assignment_questions(assignment), assignment_blocks(assignment))
+    questions = list(assignment_questions(assignment))
+    blocks = list(assignment_blocks(assignment))
+    answers = {f'q_{pk}': value for pk, value in values.items()}
+    active = conditional_question_ids(questions, answers, blocks)
+    active_blocks = conditional_block_ids(blocks, questions, answers)
+    sections = group_questions([q for q in questions if q.pk in active], [b for b in blocks if b.pk in active_blocks])
     for section in sections:
         for item in section['items']:
             if item['type'] == 'question':
@@ -436,8 +448,16 @@ def results_csv(request, pk):
 def block_content(request, pk, block_pk):
     survey = get_survey(pk)
     block = get_object_or_404(survey.blocks, pk=block_pk)
+    visibility = BlockVisibilityForm()
     form = QuestionsBuilderForm(survey=survey, initial={'block': block.pk})
     form.fields['block'].widget = forms.HiddenInput()
+    if request.method == 'GET' and request.GET.get('show_if_option'):
+        try:
+            option_id = int(request.GET['show_if_option'])
+        except (TypeError, ValueError):
+            raise Http404
+        option = get_object_or_404(form.fields['show_if_option'].queryset, pk=option_id)
+        form.initial['show_if_option'] = option.pk
     if request.method == 'POST':
         data = request.POST.copy()
         data['block'] = block.pk
@@ -445,15 +465,19 @@ def block_content(request, pk, block_pk):
             services.save_question(pk, request.user, data, request.POST.get('revision'))
             messages.success(request, 'Вопрос сохранён. Можно добавить следующий или продолжить создание опроса.')
             return redirect('surveys_builder:block_content', pk=pk, block_pk=block.pk)
-        except services.InvalidForm as error:
-            form = error.form
+        except services.InvalidForm:
+            form = QuestionsBuilderForm(data, survey=survey)
             form.fields['block'].widget = forms.HiddenInput()
+            visibility = BlockVisibilityForm(data)
+            form.is_valid()
+            visibility.is_valid()
         except ValidationError as error:
             return failure(request, error, survey)
     blocks = list(survey.blocks.prefetch_related('questions', 'text_sections'))
     block_index = next(i for i, candidate in enumerate(blocks) if candidate.pk == block.pk)
     empty_blocks = [candidate for candidate in blocks if not candidate.questions.all() and not candidate.text_sections.all()]
     return page(request, 'block_content.html', survey, edited_block=block, form=form,
+                visibility_form=visibility, show_visibility=bool(visibility.errors) or any(g['active'] for g in visibility.filter_groups),
                 items=block_items(block, block.questions.prefetch_related('options')),
                 block_number=block_index + 1, block_count=len(blocks), empty_blocks=empty_blocks,
                 structure_ready=not empty_blocks, can_add_block=len(blocks) < 50,
@@ -559,7 +583,12 @@ def section_image(request, section_pk):
     if not request.user.is_staff:
         assignment = SurveyAssignment.objects.filter(user=request.user, survey=section.block.survey).exclude(
             survey__status=SurveysBuilder.Status.DRAFT).first()
-        if not assignment or section.block_id not in assignment.visible_block_ids:
+        if not assignment:
+            raise Http404
+        saved = getattr(assignment, 'response', None)
+        values = {f'q_{a.question_id}': a.value for a in saved.answers.all()} if saved else {}
+        visible = conditional_block_ids(list(assignment_blocks(assignment)), list(assignment_questions(assignment)), values)
+        if section.block_id not in visible:
             raise Http404
     try:
         file = section.image.open('rb')

@@ -530,6 +530,7 @@ class LegacySurveyMigrationTests(TransactionTestCase):
 
     def test_legacy_survey_becomes_draft_without_data_loss(self):
         executor = MigrationExecutor(connection)
+        latest = executor.loader.graph.leaf_nodes()
         executor.migrate([self.old])
         try:
             apps = executor.loader.project_state([self.old]).apps
@@ -538,10 +539,11 @@ class LegacySurveyMigrationTests(TransactionTestCase):
             option = apps.get_model('surveys_builder', 'QuestionOptions').objects.create(question=question, text='Старый вариант')
             executor = MigrationExecutor(connection)
             executor.migrate([self.new])
-            migrated = SurveysBuilder.objects.get(pk=survey.pk)
-            self.assertTrue(migrated.is_draft)
+            apps = executor.loader.project_state([self.new]).apps
+            migrated = apps.get_model('surveys_builder', 'SurveysBuilder').objects.get(pk=survey.pk)
+            self.assertEqual(migrated.status, 'draft')
             self.assertFalse(migrated.audience_configured)
             self.assertIsNotNone(migrated.updated_at)
             self.assertEqual(migrated.questions.get().options.get().pk, option.pk)
         finally:
-            MigrationExecutor(connection).migrate([self.new])
+            MigrationExecutor(connection).migrate(latest)

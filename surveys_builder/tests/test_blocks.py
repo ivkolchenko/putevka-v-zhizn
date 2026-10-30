@@ -318,7 +318,7 @@ class QuestionBlockTests(TestCase):
         second_url = f'{first_url}?page=2'
 
         first_page = self.client.get(first_url)
-        self.assertContains(first_page, 'Страница 1 из 2')
+        self.assertNotContains(first_page, 'Страница 1 из 2')
         self.assertContains(first_page, first_question.title)
         self.assertNotContains(first_page, second_question.title)
         self.assertEqual(self.client.get(f'{first_url}?page=3').status_code, 404)
@@ -333,7 +333,7 @@ class QuestionBlockTests(TestCase):
         response = SurveyResponse.objects.get(assignment=assignment)
         self.assertEqual(response.answers.get(question=first_question).value, 'Первый')
         second_page = self.client.get(second_url)
-        self.assertContains(second_page, 'Страница 2 из 2')
+        self.assertNotContains(second_page, 'Страница 2 из 2')
         self.assertContains(second_page, second_question.title)
         self.assertNotContains(second_page, first_question.title)
 
@@ -412,6 +412,7 @@ class BlockMigrationTests(TransactionTestCase):
         before = ('surveys_builder', '0004_alter_surveysbuilder_options_and_more')
         after = ('surveys_builder', '0007_merge_block_content_and_response_protection')
         executor = MigrationExecutor(connection)
+        latest = executor.loader.graph.leaf_nodes()
         executor.migrate([before])
         try:
             apps = executor.loader.project_state([before]).apps
@@ -422,11 +423,13 @@ class BlockMigrationTests(TransactionTestCase):
             assignment = apps.get_model('surveys_builder', 'SurveyAssignment').objects.create(survey=survey, user=user)
             response = apps.get_model('surveys_builder', 'SurveyResponse').objects.create(assignment=assignment, status='submitted')
             answer = apps.get_model('surveys_builder', 'SurveyAnswer').objects.create(response=response, question=question, value='Старый ответ')
-            MigrationExecutor(connection).migrate([after])
-            migrated = QuestionsBuilder.objects.get(pk=question.pk)
+            executor = MigrationExecutor(connection)
+            executor.migrate([after])
+            apps = executor.loader.project_state([after]).apps
+            migrated = apps.get_model('surveys_builder', 'QuestionsBuilder').objects.get(pk=question.pk)
             self.assertEqual(migrated.block.title, 'Основной блок')
             self.assertEqual(migrated.position, 7)
-            self.assertEqual(SurveysBuilder.objects.get(pk=survey.pk).status, 'published')
-            self.assertEqual(SurveyAnswer.objects.get(pk=answer.pk).value, 'Старый ответ')
+            self.assertEqual(apps.get_model('surveys_builder', 'SurveysBuilder').objects.get(pk=survey.pk).status, 'published')
+            self.assertEqual(apps.get_model('surveys_builder', 'SurveyAnswer').objects.get(pk=answer.pk).value, 'Старый ответ')
         finally:
-            MigrationExecutor(connection).migrate([after])
+            MigrationExecutor(connection).migrate(latest)

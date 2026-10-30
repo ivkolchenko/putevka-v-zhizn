@@ -5,14 +5,19 @@ from .selectors import block_items
 from django.urls import reverse
 
 
-def question_data(question):
-    return {
+def question_data(question, *, staff=True):
+    data = {
         'id': question.pk, 'title': question.title, 'description': question.description,
         'block_id': question.block_id, 'block_position': question.block_position,
         'answer_type': question.answer_type, 'required': question.required,
         'position': question.position,
+        'show_if_option_id': question.show_if_option_id,
+        'parent_question_id': question.show_if_option.question_id if question.show_if_option_id else None,
         'options': [{'id': o.pk, 'text': o.text, 'position': o.position} for o in question.options.all()],
     }
+    if staff:
+        data['visibility_filters'] = question.visibility_filters
+    return data
 
 
 def section_data(section):
@@ -21,17 +26,19 @@ def section_data(section):
             'image_alt': section.image_alt, 'position': section.position}
 
 
-def block_data(block, *, staff=True):
+def block_data(block, *, staff=True, questions=None):
     data = {'id': block.pk, 'title': block.title, 'description': block.description, 'position': block.position,
+            'show_if_option_id': block.show_if_option_id,
+            'parent_question_id': block.show_if_option.question_id if block.show_if_option_id else None,
             'items': [{'type': item['type'], 'id': item['id'],
                        **({'section': section_data(item['section'])} if item['type'] == 'section' else {})}
-                      for item in block_items(block)]}
+                      for item in block_items(block, questions)]}
     if staff:
         data['visibility_filters'] = block.visibility_filters
     return data
 
 
-def survey_data(survey, *, detail=False, staff=True, block_ids=None):
+def survey_data(survey, *, detail=False, staff=True, block_ids=None, question_ids=None):
     data = {
         'id': survey.pk, 'title': survey.title, 'description': survey.description,
         'status': survey.status, 'deadline': survey.deadline,
@@ -47,8 +54,12 @@ def survey_data(survey, *, detail=False, staff=True, block_ids=None):
     if detail:
         blocks = survey.blocks.all() if staff else survey.blocks.filter(pk__in=block_ids or [])
         questions = survey.questions.all() if staff else survey.questions.filter(block_id__in=block_ids or [])
-        data['blocks'] = [block_data(block, staff=staff) for block in blocks.prefetch_related('questions', 'text_sections')]
-        data['questions'] = [question_data(q) for q in questions.prefetch_related('options')]
+        if not staff and question_ids is not None:
+            questions = questions.filter(pk__in=question_ids)
+        questions = list(questions.prefetch_related('options'))
+        data['blocks'] = [block_data(block, staff=staff, questions=[q for q in questions if q.block_id == block.pk])
+                          for block in blocks.prefetch_related('text_sections')]
+        data['questions'] = [question_data(q, staff=staff) for q in questions]
     return data
 
 

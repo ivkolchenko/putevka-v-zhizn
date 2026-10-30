@@ -10,7 +10,7 @@ from django.views.decorators.http import require_http_methods
 from . import services
 from .forms import ResponseForm
 from .models import SurveyAssignment, SurveyResponse, SurveysBuilder
-from .selectors import assignment_blocks, assignment_questions, group_questions
+from .selectors import assignment_blocks, assignment_questions, conditional_block_ids, group_questions
 from .views import response_sections
 
 
@@ -51,7 +51,9 @@ def answer(request, pk):
     submitted = response is not None and response.status == 'submitted'
     initial = {f'q_{a.question_id}': a.value for a in response.answers.all()} if response else {}
     questions = list(assignment_questions(assignment))
-    pages = group_questions(questions, assignment_blocks(assignment)) or [{'block': None, 'questions': [], 'items': []}]
+    blocks = list(assignment_blocks(assignment))
+    active_blocks = conditional_block_ids(blocks, questions, initial)
+    pages = group_questions(questions, [b for b in blocks if b.pk in active_blocks]) or [{'block': None, 'questions': [], 'items': []}]
     try:
         page_number = int(request.GET.get('page', '1'))
     except (TypeError, ValueError):
@@ -70,17 +72,23 @@ def answer(request, pk):
         action = request.POST.get('action')
         if action not in ('save', 'next', 'submit'):
             errors = ['Неизвестное действие.']
-        elif action == 'next' and page_number == len(pages):
-            errors = ['Это последняя страница опроса.']
-        elif action == 'submit' and page_number != len(pages):
-            errors = ['Отправить ответ можно только на последней странице опроса.']
         else:
             try:
-                services.save_response_page(
+                candidate = initial.copy()
+                for question in current_questions:
+                    name = f'q_{question.pk}'
+                    candidate[name] = request.POST.getlist(name) if question.answer_type == 'multiple_choice' else request.POST.get(name)
+                candidate_blocks = conditional_block_ids(blocks, questions, candidate)
+                current_block_id = current_page['block'].pk if current_page['block'] else None
+                current_index = next((i for i, b in enumerate(blocks) if b.pk == current_block_id), -1)
+                has_next = any(b.pk in candidate_blocks for b in blocks[current_index + 1:])
+                if action == 'submit' and has_next and page_number != len(pages):
+                    raise ValidationError('Отправить ответ можно только на последней странице опроса.')
+                saved = services.save_response_page(
                     pk,
                     request.user,
                     request.POST,
-                    final=action == 'submit',
+                    final=action == 'submit' and not has_next,
                     revision=request.POST.get('response_revision'),
                     question_ids=[question.pk for question in current_questions],
                     require_page=action != 'save',
@@ -89,8 +97,12 @@ def answer(request, pk):
                     'save': 'Черновик ответа сохранён.',
                     'next': 'Ответы страницы сохранены.',
                     'submit': 'Ответ отправлен.',
-                }[action])
-                destination = page_number + 1 if action == 'next' else page_number
+                }['next' if action == 'submit' and has_next else action])
+                updated = {f'q_{a.question_id}': a.value for a in saved.answers.all()}
+                updated_blocks = conditional_block_ids(blocks, questions, updated)
+                visible = [b.pk for b in blocks if b.pk in updated_blocks]
+                current_number = visible.index(current_block_id) + 1 if current_block_id in visible else 1
+                destination = current_number + 1 if action in ('next', 'submit') and has_next else current_number
                 return redirect(answer_page_url(pk, destination))
             except services.InvalidForm as error:
                 form = error.form
@@ -111,6 +123,15 @@ def answer(request, pk):
         'sections': all_response_sections[page_number - 1:page_number],
         'page_number': page_number,
         'page_count': len(pages),
+        'navigation': {
+            'current_block': current_page['block'].pk if current_page['block'] else None,
+            'blocks': [{'id': b.pk, 'question': b.show_if_option.question_id if b.show_if_option_id else None,
+                        'option': b.show_if_option_id} for b in blocks],
+            'questions': [{'id': q.pk, 'block': q.block_id,
+                           'question': q.show_if_option.question_id if q.show_if_option_id else None,
+                           'option': q.show_if_option_id} for q in questions],
+            'answers': initial,
+        },
         'page_url': answer_page_url(pk, page_number),
         'previous_page_url': answer_page_url(pk, page_number - 1) if page_number > 1 else None,
         'next_page_url': answer_page_url(pk, page_number + 1) if page_number < len(pages) else None,

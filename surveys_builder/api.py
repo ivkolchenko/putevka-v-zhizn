@@ -18,7 +18,7 @@ from .api_serializers import (block_data, question_data, section_data, recipient
                               survey_data)
 from .forms import AdditionalAudienceForm, AudienceForm, BlockVisibilityForm
 from .models import QuestionsBuilder, SurveyAssignment, SurveyResponse, SurveysBuilder
-from .selectors import assignment_questions, resolve_audience
+from .selectors import assignment_blocks, assignment_questions, conditional_block_ids, conditional_question_ids, resolve_audience
 
 
 class ApiError(Exception):
@@ -141,6 +141,7 @@ def metadata(request):
         'csrf_token': get_token(request), 'audience_choices': choices,
         'audience_filter_fields': list(AudienceForm.FILTER_FIELDS),
         'block_visibility_filter_fields': list(BlockVisibilityForm.FILTER_FIELDS),
+        'question_visibility_filter_fields': list(BlockVisibilityForm.FILTER_FIELDS),
         'recipient_requirements': {'active': True, 'registration_complete': True},
         'answer_types': [{'value': v, 'label': str(label)} for v, label in QuestionsBuilder.AnswerType.choices],
         'survey_statuses': [{'value': v, 'label': str(label)} for v, label in SurveysBuilder.Status.choices],
@@ -259,6 +260,11 @@ def question_input(data, question=None):
         raise ApiError('invalid_options', 'options: до 50 непустых строк, каждая до 200 символов без переноса строки.')
     values = {name: data.get(name, getattr(question, name) if question else default)
               for name, default in [('title', ''), ('description', ''), ('answer_type', 'short_text'), ('required', False)]}
+    option_id = data.get('show_if_option_id', question.show_if_option_id if question else None)
+    if option_id is not None and (type(option_id) is not int or option_id < 1):
+        raise ApiError('invalid_type', 'show_if_option_id: ожидается ID варианта ответа или null.')
+    values['show_if_option'] = option_id
+    values['visibility_filters'] = data.get('visibility_filters', question.visibility_filters if question else {})
     values['options_text'] = '\n'.join(options)
     block_id = data.get('block_id', question.block_id if question else None)
     if type(block_id) is not int or block_id < 1:
@@ -267,14 +273,22 @@ def question_input(data, question=None):
     return values
 
 
-QUESTION_FIELDS = ('title', 'description', 'answer_type', 'required', 'options', 'block_id', 'revision')
+def block_condition_input(data, block=None):
+    option_id = data.get('show_if_option_id', block.show_if_option_id if block else None)
+    if option_id is not None and (type(option_id) is not int or option_id < 1):
+        raise ApiError('invalid_type', 'show_if_option_id: ожидается ID варианта ответа или null.')
+    return option_id
+
+
+QUESTION_FIELDS = ('title', 'description', 'answer_type', 'required', 'options', 'block_id', 'visibility_filters', 'show_if_option_id', 'revision')
 
 
 @endpoint('GET', 'POST')
 def blocks(request, pk):
     if request.method == 'POST':
-        data = payload(request, ('title', 'description', 'visibility_filters', 'revision'))
+        data = payload(request, ('title', 'description', 'visibility_filters', 'show_if_option_id', 'revision'))
         text_fields(data, ('title', 'description'))
+        data['show_if_option'] = block_condition_input(data)
         block = services.save_block(pk, request.user, data, revision(data))
         return JsonResponse({'revision': block.survey.revision, 'block': block_data(block)}, status=201)
     survey = get_survey(pk)
@@ -287,13 +301,14 @@ def block_detail(request, pk, block_pk):
     block = get_object_or_404(survey.blocks, pk=block_pk)
     if request.method == 'GET':
         return JsonResponse({'revision': survey.revision, 'block': block_data(block)})
-    data = payload(request, ('revision',) if request.method == 'DELETE' else ('title', 'description', 'visibility_filters', 'revision'))
+    data = payload(request, ('revision',) if request.method == 'DELETE' else ('title', 'description', 'visibility_filters', 'show_if_option_id', 'revision'))
     expected = revision(data)
     if request.method == 'DELETE':
         survey = services.block_action(pk, block_pk, request.user, 'delete', expected)
         return JsonResponse(survey_data(survey, detail=True))
     text_fields(data, ('title', 'description'))
     values = {name: data.get(name, getattr(block, name)) for name in ('title', 'description', 'visibility_filters')}
+    values['show_if_option'] = block_condition_input(data, block)
     block = services.save_block(pk, request.user, values, expected, block_pk)
     return JsonResponse({'revision': block.survey.revision, 'block': block_data(block)})
 
@@ -434,8 +449,11 @@ def my_surveys(request):
 @endpoint('GET', staff=False)
 def my_survey_detail(request, pk):
     assignment = my_assignment(pk, request.user)
-    return JsonResponse({'id': assignment.pk, 'survey': survey_data(assignment.survey, detail=True, staff=False, block_ids=assignment.visible_block_ids),
-                         'response': response_data(getattr(assignment, 'response', None))})
+    response = getattr(assignment, 'response', None)
+    values = {f'q_{answer.question_id}': answer.value for answer in response.answers.all()} if response else {}
+    blocks = conditional_block_ids(list(assignment_blocks(assignment)), list(assignment_questions(assignment)), values)
+    return JsonResponse({'id': assignment.pk, 'survey': survey_data(assignment.survey, detail=True, staff=False, block_ids=blocks, question_ids=assignment.visible_question_ids),
+                         'response': response_data(response)})
 
 
 @endpoint('PUT', staff=False)
@@ -447,11 +465,14 @@ def my_response(request, pk):
         raise ApiError('invalid_type', 'Передайте answers как объект и final как boolean.')
     assignment = my_assignment(pk, request.user)
     questions = {str(q.pk): q for q in assignment_questions(assignment)}
+    active = conditional_question_ids(questions.values(), {'q_' + key: value for key, value in data['answers'].items()}, list(assignment_blocks(assignment)))
     values = {}
     for key, value in data['answers'].items():
         if key not in questions:
             raise ApiError('invalid_question', 'Ответ содержит вопрос из другого опроса.')
         kind = questions[key].answer_type
+        if questions[key].pk not in active:
+            value = None
         if value is None:
             pass
         elif kind == QuestionsBuilder.AnswerType.MULTIPLE_CHOICE:

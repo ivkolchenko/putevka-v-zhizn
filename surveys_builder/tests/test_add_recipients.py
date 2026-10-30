@@ -11,7 +11,8 @@ from django.utils import timezone
 from core.models import Notification, RegistrationPersonalData, UserNotification
 from scholar_form.models import UserInfo
 from .. import services
-from ..models import SurveyAssignment, SurveyResponse, SurveysBuilder
+from ..models import BlockTextSection, QuestionBlock, QuestionOptions, QuestionsBuilder, SurveyAssignment, SurveyResponse, SurveysBuilder
+from ..selectors import assignment_questions
 
 
 class AdditionalRecipientsTests(TestCase):
@@ -193,4 +194,42 @@ class AdditionalRecipientsTests(TestCase):
         self.assertEqual(page.context['available_count'], 0)
         self.assertContains(page, 'Опрос уже назначен всем доступным участникам')
         self.assertNotContains(page, 'data-assignment-form')
+
+    def test_addition_freezes_question_visibility_for_new_students(self):
+        self.question.visibility_filters = {'profiles': ['it']}
+        self.question.save(update_fields=['visibility_filters'])
+        self.add(self.it, self.medic)
+        it_assignment = self.survey.assignments.get(user=self.it)
+        medic_assignment = self.survey.assignments.get(user=self.medic)
+        self.assertEqual(it_assignment.visible_question_ids, [self.question.pk])
+        self.assertEqual(medic_assignment.visible_question_ids, [])
+        UserInfo.objects.filter(user=self.medic).update(internal_study_profile='it')
+        self.assertFalse(assignment_questions(medic_assignment).exists())
+        self.assignment.refresh_from_db()
+        self.assertEqual(self.assignment.visible_question_ids, [self.question.pk])
+
+    def test_invalid_question_visibility_returns_selection_form_without_assigning(self):
+        self.question.visibility_filters = {'grades': ['9']}
+        self.question.save(update_fields=['visibility_filters'])
+        page = self.client.post(self.url, {'revision': self.version(), 'mode': 'individual',
+            'included_users': [self.it.pk], 'action': 'preview'})
+        self.assertEqual(page.status_code, 200)
+        self.assertTrue(page.context['form'].non_field_errors())
+        self.assertIn('included_users', page.context['form'].fields)
+        self.assertEqual(self.survey.assignments.count(), 1)
+
+    def test_addition_removes_conditional_blocks_when_parent_question_is_unavailable(self):
+        parent = QuestionsBuilder.objects.create(survey=self.survey, block=self.common,
+            title='Выбор для IT', answer_type='single_choice', visibility_filters={'profiles': ['it']},
+            position=2, block_position=3)
+        option = QuestionOptions.objects.create(question=parent, text='Показать подробности')
+        branch = QuestionBlock.objects.create(survey=self.survey, title='Условный блок', position=4, show_if_option=option)
+        BlockTextSection.objects.create(block=branch, text='Подробности для IT')
+        self.add(self.it, self.medic)
+        it_assignment = self.survey.assignments.get(user=self.it)
+        medic_assignment = self.survey.assignments.get(user=self.medic)
+        self.assertIn(branch.pk, it_assignment.visible_block_ids)
+        self.assertIn(parent.pk, it_assignment.visible_question_ids)
+        self.assertNotIn(branch.pk, medic_assignment.visible_block_ids)
+        self.assertNotIn(parent.pk, medic_assignment.visible_question_ids)
 
